@@ -15,6 +15,22 @@ from .config import Settings
 log = logging.getLogger(__name__)
 
 
+class StickerVerificationError(RuntimeError):
+    """Generated file failed the official WNDR contract and must not be delivered."""
+
+    def __init__(self, checks: verify.VerifyResult):
+        self.checks = checks
+        super().__init__("; ".join(checks.problems) or "WNDR style verification failed")
+
+
+def _verify_or_reject(path: Path) -> verify.VerifyResult:
+    checks = verify.verify_sticker(path, enforce_style=True)
+    if not checks.ok:
+        path.unlink(missing_ok=True)
+        raise StickerVerificationError(checks)
+    return checks
+
+
 @dataclass
 class StickerResult:
     path: Path
@@ -76,7 +92,7 @@ def make_sticker(
     canvas = cutout.telegram_canvas(lettered)
     destination = cutout.save_webp(canvas, settings.stickers_dir / filename)
 
-    checks = verify.verify_sticker(destination)
+    checks = _verify_or_reject(destination)
     log.info(
         "стикер %s готов за %.1fс (%s/%s, форма %s)%s",
         filename,
@@ -134,7 +150,7 @@ def make_illustration(
         raw_path=raw_path,
         font_size=0,
         lines=[],
-        checks=verify.verify_sticker(destination),
+        checks=_verify_or_reject(destination),
         seconds=time.monotonic() - started,
     )
 
@@ -164,7 +180,7 @@ def rebuild_from_raw(raw_path: Path, phrase: str, settings: Settings) -> Sticker
         raw_path=raw_path,
         font_size=layout.font_size,
         lines=[" ".join(w.text for w in line) for line in layout.lines],
-        checks=verify.verify_sticker(destination),
+        checks=_verify_or_reject(destination),
         seconds=time.monotonic() - started,
     )
 

@@ -1,0 +1,64 @@
+{
+  "source": "docs/reference/WNDR-Sticker-Agent-v0.1.pdf",
+  "source_url": "https://drive.google.com/file/d/13KB_4Wlil-NHcZlOPOYPLFTpCzFbW_uw/view",
+  "source_sha256": "61cafa0d22e11880fb5364d221b918f447cea44dae1ac9ff9017b201d9153a10",
+  "source_sections": [
+    "2 · Эталон результата",
+    "8 · Визуальный стиль",
+    "9 · Промпты для генерации заготовок"
+  ],
+  "canvas": {
+    "size_px": 512,
+    "generation_background": "#000000",
+    "background_rule": "plain solid black; black must touch all four corners for cut-out"
+  },
+  "palette": {
+    "accent": "#CC3D11",
+    "black": "#0D0D0D",
+    "cream": "#F2E2C8",
+    "outline": "#F7F3EA"
+  },
+  "color_rules": [
+    "exactly two base colors per text plate",
+    "optional accent only on 1-3 words",
+    "no more than three colors in a sticker design"
+  ],
+  "outline": {
+    "outer_px_at_512": [
+      8,
+      12
+    ],
+    "color": "#F7F3EA",
+    "purpose": "separate sticker from light and dark chat backgrounds"
+  },
+  "typography": {
+    "family_style": "dense heavy retro grotesque / 1970s signage",
+    "weight": "heavy only; no light fonts",
+    "alignment": "centered",
+    "line_count": [
+      1,
+      3
+    ],
+    "text_source": "rendered by code, never by the image model"
+  },
+  "allowed_plate_forms": [
+    "rounded rectangle",
+    "wavy blob / speech blob",
+    "starburst",
+    "lightning / cut parallelogram",
+    "decorative oval",
+    "arrow / pointer badge",
+    "stamp / toothed edge"
+  ],
+  "illustration_style": "vintage botanical/engraving illustration, flat fills, heavy black linework, same palette",
+  "hard_bans": [
+    "model-generated text, letters, numbers, captions, watermarks or signatures",
+    "gradients",
+    "3D",
+    "gloss",
+    "drop shadow",
+    "photorealism/photo",
+    "more than three colors",
+    "non-black generation background"
+  ]
+}

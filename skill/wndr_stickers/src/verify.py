@@ -6,6 +6,8 @@ from pathlib import Path
 
 from PIL import Image
 
+from .style import ACCENT, BLACK, CREAM, NEAR_WHITE
+
 MAX_BYTES = 512 * 1024
 REQUIRED_SIZE = (512, 512)
 
@@ -16,12 +18,20 @@ class VerifyResult:
     problems: list[str] = field(default_factory=list)
     size: tuple[int, int] | None = None
     bytes: int | None = None
+    palette_fraction: float | None = None
 
     def __bool__(self) -> bool:
         return self.ok
 
 
-def verify_sticker(path: Path, *, max_bytes: int = MAX_BYTES) -> VerifyResult:
+def verify_sticker(
+    path: Path,
+    *,
+    max_bytes: int = MAX_BYTES,
+    enforce_style: bool = False,
+    palette_tolerance: int = 48,
+    min_palette_fraction: float = 0.85,
+) -> VerifyResult:
     problems: list[str] = []
     if not path.exists():
         return VerifyResult(ok=False, problems=[f"файла нет: {path}"])
@@ -47,9 +57,9 @@ def verify_sticker(path: Path, *, max_bytes: int = MAX_BYTES) -> VerifyResult:
         "левый нижний": alpha.getpixel((0, h - 1)),
         "правый нижний": alpha.getpixel((w - 1, h - 1)),
     }
-    opaque = [name for name, value in corners.items() if value != 0]
-    if opaque:
-        problems.append("углы не прозрачны: " + ", ".join(opaque))
+    opaque_corners = [name for name, value in corners.items() if value != 0]
+    if opaque_corners:
+        problems.append("углы не прозрачны: " + ", ".join(opaque_corners))
 
     bbox = alpha.getbbox()
     if bbox is None:
@@ -57,7 +67,40 @@ def verify_sticker(path: Path, *, max_bytes: int = MAX_BYTES) -> VerifyResult:
     elif bbox[0] == 0 or bbox[1] == 0 or bbox[2] == w or bbox[3] == h:
         problems.append("стикер касается краёв холста")
 
-    return VerifyResult(ok=not problems, problems=problems, size=dims, bytes=size_bytes)
+    palette_fraction = None
+    if enforce_style:
+        palette = (ACCENT, BLACK, CREAM, NEAR_WHITE)
+        rgba = image.tobytes()
+        opaque_pixels = [
+            (rgba[i], rgba[i + 1], rgba[i + 2])
+            for i in range(0, len(rgba), 4)
+            if rgba[i + 3] > 16
+        ]
+        if opaque_pixels:
+            tolerance_sq = palette_tolerance**2
+            canonical = sum(
+                min(
+                    sum((channel - target[i]) ** 2 for i, channel in enumerate(pixel))
+                    for target in palette
+                )
+                <= tolerance_sq
+                for pixel in opaque_pixels
+            )
+            palette_fraction = canonical / len(opaque_pixels)
+            if palette_fraction < min_palette_fraction:
+                problems.append(
+                    "палитра вне WNDR-контракта: "
+                    f"{palette_fraction:.1%} канонических пикселей, "
+                    f"нужно минимум {min_palette_fraction:.0%}"
+                )
+
+    return VerifyResult(
+        ok=not problems,
+        problems=problems,
+        size=dims,
+        bytes=size_bytes,
+        palette_fraction=palette_fraction,
+    )
 
 
 def verify_text(rendered_phrase: str, requested_phrase: str) -> VerifyResult:

@@ -1,0 +1,37 @@
+;; WNDR community bot runtime boundary.
+;; Default macOS access stays available outside Katya's home. Inside home the
+;; bot sees only its own repository/runtime plus the one credential required
+;; by the Codex image provider.
+(version 1)
+(allow default)
+
+;; Deny Katya's SYSTEM / WORK / PERSONAL files by default.
+(deny file-read* (subpath "/Users/ekaterinasum"))
+(deny file-write* (subpath "/Users/ekaterinasum"))
+
+;; Bot code, venv, reference sheet and local secret config. Read-only.
+;; Metadata on ancestors is required for Python's realpath(); directory contents
+;; remain denied because only the exact ancestor nodes are allowed here.
+(allow file-read-metadata
+  (literal "/Users/ekaterinasum")
+  (literal "/Users/ekaterinasum/dev"))
+(allow file-read* (subpath "/Users/ekaterinasum/dev/wndr-stickers"))
+
+;; Dedicated community state/output/logs. No access to katya-ai or Vault.
+(allow file-read* file-write* (subpath "/Users/ekaterinasum/.wndr-stickers"))
+
+;; Codex subscription credential only; config, rules and sessions stay denied.
+(allow file-read* (literal "/Users/ekaterinasum/.codex/auth.json"))
+
+;; Block known local AI/private services and every local proxy port that could
+;; tunnel back into them. A wildcard localhost filter is not used because macOS
+;; Seatbelt interprets it as all TCP traffic, including Telegram/image providers.
+(deny network-outbound (remote tcp "localhost:6333"))
+(deny network-outbound (remote tcp "localhost:6334"))
+(deny network-outbound (remote tcp "localhost:8920"))
+(deny network-outbound (remote tcp "localhost:11434"))
+(deny network-outbound (remote tcp "localhost:49530"))
+(deny network-outbound (remote tcp "localhost:10808"))
+(deny network-outbound (remote tcp "localhost:10809"))
+(deny network-outbound (remote tcp "localhost:10810"))
+(deny network-outbound (remote tcp "localhost:10811"))

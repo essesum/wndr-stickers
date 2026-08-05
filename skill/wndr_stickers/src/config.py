@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     # Стиль
     reference_sheet: Path = Path("assets/reference/wndr-reference-sheet.png")
     font_path: Path = Path("/System/Library/Fonts/Supplemental/Impact.ttf")
-    allow_arrow_shapes: bool = False
+    allow_arrow_shapes: bool = True
 
     # Стикерпак
     pack_slug: str = "wndr"
@@ -70,15 +70,17 @@ class Settings(BaseSettings):
     rate_global_day: int = 300
 
     # Пути
-    state_dir: Path = Path("~/katya-ai/state/wndr-stickers").expanduser()
-    #: Зона community/ — данные сообщества, а не Кати. Персональные данные
-    #: (Telegram-ID, авторство) живут только в SQLite в state_dir и сюда не
-    #: попадают: в память сеется единственный файл _context.md.
-    output_dir: Path = Path("~/katya-ai/community/wndr-stickers").expanduser()
+    # Runtime живёт вне Katya AI/Vault/Hermes. Это отдельная data-plane зона.
+    state_dir: Path = Path("~/.wndr-stickers/state").expanduser()
+    output_dir: Path = Path("~/.wndr-stickers/output").expanduser()
 
     @property
     def db_path(self) -> Path:
         return self.state_dir / "stickers.db"
+
+    @property
+    def lock_path(self) -> Path:
+        return self.state_dir / "bot.lock"
 
     @property
     def stickers_dir(self) -> Path:

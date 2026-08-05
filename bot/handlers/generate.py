@@ -72,7 +72,7 @@ async def _produce(
     # Проверяем повтор ДО генерации: так не тратим вызов модели на то,
     # что в паке уже есть. Память сообщества недоступна — просто идём дальше.
     if settings.duplicate_check:
-        similar = await community_memory.find_similar(phrase)
+        similar = await community_memory.find_similar(settings.db_path, phrase)
         hit = community_memory.decide_duplicate(
             similar, threshold=settings.duplicate_threshold
         )
@@ -96,6 +96,14 @@ async def _produce(
             "Чаще всего это кончившиеся кредиты. Кате уже видно в логах."
         )
         return
+    except pipeline.StickerVerificationError as exc:
+        await db.log_request(settings.db_path, user.id, phrase, "failed", str(exc)[:500])
+        log.warning("вариант отклонён WNDR style gate: %s", exc)
+        await notice.edit_text(
+            "Вариант не прошёл проверку фирменного стиля WNDR, поэтому я его не отправляю. "
+            "Попробуй ещё раз — плохой вариант в пак не попадёт."
+        )
+        return
     except Exception as exc:  # noqa: BLE001
         await db.log_request(settings.db_path, user.id, phrase, "failed", str(exc)[:500])
         log.exception("пайплайн упал")
@@ -108,6 +116,7 @@ async def _produce(
     )
     # Запоминаем фразу, чтобы следующий такой же запрос поймался как повтор.
     await community_memory.remember(
+        settings.db_path,
         result.phrase,
         sticker_id=sticker_id,
         slug=result.slug,
@@ -115,9 +124,6 @@ async def _produce(
     )
 
     caption = f"«{result.phrase}»\nформа {result.shape} · кегль {result.font_size}"
-    if not result.ok:
-        caption += "\n⚠️ " + "; ".join(result.checks.problems)
-
     await notice.delete()
     # документом — чтобы Telegram не пережал файл и он остался пригодным для пака
     await m.answer_document(

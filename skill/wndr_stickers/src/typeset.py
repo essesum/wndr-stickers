@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFont
 
 from .plate import Rect
-from .style import ACCENT, BLACK, CREAM, NEAR_WHITE, TEXT_COLORS
+from .style import ACCENT, BLACK, CREAM
 
 _ACCENT_RE = re.compile(r"\*([^*]+)\*")
 
@@ -63,19 +63,26 @@ def contrast_ratio(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
     return (lighter + 0.05) / (darker + 0.05)
 
 
+def _nearest_base_color(background: tuple[int, int, int]) -> tuple[int, int, int]:
+    return min(
+        (ACCENT, BLACK, CREAM),
+        key=lambda c: sum((a - b) ** 2 for a, b in zip(c, background, strict=True)),
+    )
+
+
 def pick_text_color(background: tuple[int, int, int]) -> tuple[int, int, int]:
-    """Цвет текста — палитровый, с максимальным контрастом к заливке плашки."""
-    return max(TEXT_COLORS, key=lambda c: contrast_ratio(c, background))
+    """Canonical pairing from the official guide, not a generic contrast guess."""
+    nearest = _nearest_base_color(background)
+    return CREAM if nearest in (ACCENT, BLACK) else BLACK
 
 
 def pick_accent_color(
     background: tuple[int, int, int], text_color: tuple[int, int, int]
 ) -> tuple[int, int, int]:
-    """Акцент — фирменный оранжевый; если он и есть фон/основной цвет, берём запасной."""
-    if contrast_ratio(ACCENT, background) >= 2.5 and text_color != ACCENT:
-        return ACCENT
-    fallback = CREAM if _relative_luminance(background) < 0.4 else BLACK
-    return NEAR_WHITE if fallback == text_color else fallback
+    """Orange accent on black/cream; black accent on an orange plate."""
+    nearest = _nearest_base_color(background)
+    accent = BLACK if nearest == ACCENT else ACCENT
+    return accent if accent != text_color else (BLACK if text_color != BLACK else CREAM)
 
 
 def _split_into_lines(words: list[Word], line_count: int) -> list[list[Word]]:

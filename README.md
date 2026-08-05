@@ -1,8 +1,23 @@
 # wndr-stickers
 
 Отдельный Telegram-бот, который делает стикеры для сообщества WNDR в стиле пака.
-Топология повторяет `english-tutor`: самостоятельный процесс под launchd плюс
-Hermes-скилл сайдкаром.
+Самостоятельный процесс под launchd; Hermes-скилл существует только как
+операционный sidecar и самим ботом не загружается.
+
+WNDR Club — место, где мы вместе продвигаемся в важных областях жизни и
+поддерживаем друг друга на пути. В основе — meta-skill действия: двигаться
+вперёд, даже когда нет всех ответов; не ждать идеальных условий, а делать шаги
+и собирать результаты. Стикерпак — язык этого движения, не просто мерч.
+
+## Граница изоляции
+
+- Runtime/state/output/logs живут только в `~/.wndr-stickers/`, вне Katya AI,
+  Hermes, WORK/PERSONAL и Vault.
+- SQLite — единственное durable-хранилище; shared Qdrant и Memory API не используются.
+- Весь launchd-runtime запускается под macOS `sandbox-exec` с профилем `deploy/wndr-stickers.sb`: home Кати deny-by-default, разрешены только repo, `~/.wndr-stickers/` и `~/.codex/auth.json`.
+- LaunchAgent выставляет `WNDR_RUNTIME_SANDBOX=1`; поэтому Codex не применяет вложенный `sandbox-exec` (macOS это запрещает), но всё равно получает временные `HOME`/`CODEX_HOME`, env allowlist и без user config/rules/sessions.
+- При ручном запуске без `WNDR_RUNTIME_SANDBOX=1` Codex сам оборачивается в standalone `sandbox-exec`, запрещающий настоящий home.
+- Telegram poller защищён file lock: второй процесс завершается до `getUpdates`.
 
 ## Суть подхода
 
@@ -44,6 +59,8 @@ cp deploy/com.katya.wndr-stickers.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.katya.wndr-stickers.plist
 ```
 
+`deploy/com.katya.wndr-stickers.plist` и установленный LaunchAgent должны содержать `WNDR_RUNTIME_SANDBOX=1`; это маркер уже активной outer Seatbelt-песочницы.
+
 ## Как пользоваться
 
 Прислать боту фразу — вернётся готовый стикер с кнопками «ещё вариант» и «в пак».
@@ -65,12 +82,15 @@ launchctl load ~/Library/LaunchAgents/com.katya.wndr-stickers.plist
 
 | Провайдер | Модель | Что нужно |
 |---|---|---|
+| `codex` | `gpt-5.5` + built-in image_gen | подписка ChatGPT; изолированная песочница |
 | `openrouter_gpt` | `openai/gpt-5-image` | кредиты на openrouter.ai |
 | `openai` | `gpt-image-1` через Responses API | боевой `OPENAI_API_KEY` |
 | `gemini` | `gemini-3-pro-image-preview` | ключ Gemini, есть бесплатный тариф |
 
-Подписка ChatGPT доступа к image-API не даёт: в `~/.codex/auth.json` лежит OAuth,
-а `OPENAI_API_KEY: null`. Для прямого OpenAI нужен отдельный платный ключ.
+Подписка ChatGPT не даёт прямого image-API, но Codex CLI может использовать
+built-in `image_gen`. Бот копирует только OAuth-auth файл в одноразовый temp-home;
+остальной `~/.codex` и настоящий home недоступны subprocess. Для прямого OpenAI
+по-прежнему нужен отдельный платный ключ.
 
 OpenRouter резервирует кредиты под `max_tokens`, поэтому при почти нулевом
 балансе он отвечает `402` даже на маленький запрос.
@@ -92,9 +112,11 @@ OpenRouter резервирует кредиты под `max_tokens`, поэто
 | кремовый | `#F2E2C8` |
 | обводка | `#F7F3EA` |
 
-Типографика доминирует, иллюстрация лишь усиливает смысл. Стрелки выключены —
-свежий хендофф их запретил, хотя на старом эталонном листе они ещё встречаются;
-включаются флагом `ALLOW_ARROW_SHAPES=true`.
+Source of truth по стилю: `docs/reference/WNDR-Sticker-Agent-v0.1.pdf` (sections 2/8/9) и машинный контракт `docs/reference/wndr-style-contract.v0.1.json`.
+
+Типографика: плотный тяжёлый ретро-гротеск, центр, 1–3 строки, без light-шрифтов. Обводка 8–12px при 512px. Формы: скруглённый прямоугольник, wavy blob, starburst, молния/резаный параллелограмм, декоративный овал, стрелка/указатель, stamp/зубчатый край. Стрелки — каноническая форма v0.1.
+
+Модель не пишет текст. Запрещены градиенты, 3D, gloss, drop shadow, фото/photorealism, не-чёрный фон генерации и больше трёх цветов.
 
 ## Тесты
 

@@ -1,16 +1,27 @@
 ---
 name: wndr-stickers
 description: Стикеры для сообщества WNDR. Использовать, когда Катя делает или правит стикеры WNDR, спрашивает про стикерпак, стиль пака, или когда что-то не так с ботом @wndr-стикеров. Не для других стикерпаков.
-zone: work
+zone: community
 owner: Катя
 proactive: false
-version: 0.1.0
+version: 0.2.0
 ---
 
 # wndr-stickers
 
 Hermes-скилл к самостоятельному Telegram-боту, который делает стикеры для
 сообщества WNDR в утверждённом стиле пака.
+
+## Что такое WNDR Club
+
+WNDR Club — место, где мы вместе продвигаемся в важных областях жизни и
+поддерживаем друг друга на пути.
+
+В основе клуба — meta-skill действия: движение вперёд, даже когда нет всех
+ответов. Не ждать идеальных условий, а делать шаги и собирать результаты.
+
+Стикерпак — не просто визуальный мерч, а язык этого движения: он поддерживает
+действие, взаимную опору и право двигаться через неопределённость.
 
 ## Главное про подход
 
@@ -33,9 +44,10 @@ Hermes-скилл к самостоятельному Telegram-боту, кот�
 
 ## Чего не делает
 
+- Не загружает Hermes, Катину память, WORK/PERSONAL-контекст или Vault
+- Не подключается к общему Qdrant/Memory API: фразы и vectors живут в своей SQLite
 - Не перезаписывает утверждённые версии — новые решения уходят в `-v2`, `-v3`
-- Не ставит стрелки: свежий хендофф их запретил, хотя на старом листе они есть
-  (переключается флагом `ALLOW_ARROW_SHAPES`)
+- Не применяет неканонические запреты на стрелки: стрелка/указатель входит в canonical v0.1 формы
 - Не занимается другими стикерпаками
 
 ## Точки входа
@@ -49,9 +61,7 @@ Hermes-скилл к самостоятельному Telegram-боту, кот�
 
 ## Стиль
 
-Палитра ровно три цвета плюс кант: `#CC3D11`, `#0D0D0D`, `#F2E2C8`, обводка `#F7F3EA`.
-Типографика доминирует, иллюстрация только усиливает смысл. Формы: скруглённый
-прямоугольник, волнистое облако, взрыв-звезда, молния, овал, марка, облако.
+Source of truth: `docs/reference/WNDR-Sticker-Agent-v0.1.pdf` sections 2/8/9 and `docs/reference/wndr-style-contract.v0.1.json`. Палитра ровно: `#CC3D11`, `#0D0D0D`, `#F2E2C8`, обводка `#F7F3EA`. Ровно два базовых цвета плюс акцент на 1–3 словах. Обводка 8–12px при 512px. Типографика: плотный тяжёлый ретро-гротеск, центр, 1–3 строки, без light-шрифтов. Формы: скруглённый прямоугольник, wavy blob, starburst, молния/резаный параллелограмм, декоративный овал, стрелка/указатель, stamp/зубчатый край.
 
 Акцентное слово помечается звёздочками: `Это не *тантра*` — слово станет оранжевым.
 
@@ -59,19 +69,21 @@ Hermes-скилл к самостоятельному Telegram-боту, кот�
 
 Цепочка в `.env`, слева направо с автоматическим fallback:
 
+- `codex` — GPT image по подписке ChatGPT; в launchd наследует outer Seatbelt (`WNDR_RUNTIME_SANDBOX=1`) и не запускает вложенный sandbox-exec, при ручном запуске включает standalone sandbox; всегда одноразовый HOME/CODEX_HOME и env allowlist
 - `openrouter_gpt` — GPT image через OpenRouter, модель `openai/gpt-5-image`
 - `openai` — прямой `api.openai.com`, Responses API с инструментом `image_generation`
 - `gemini` — `gemini-3-pro-image-preview`, работает и на бесплатном ключе
 
-Подписка ChatGPT в `~/.codex/auth.json` картинок через API НЕ даёт — там OAuth,
-`OPENAI_API_KEY: null`. Для провайдера `openai` нужен отдельный боевой ключ.
+Подписка ChatGPT не даёт прямой image API, но Codex CLI использует built-in
+`image_gen`. В subprocess копируется только auth-файл; user config, rules,
+sessions и настоящий home недоступны. Для `openai` нужен отдельный боевой ключ.
 
 ## Проверки, когда что-то не так
 
 ```bash
 cd ~/dev/wndr-stickers
 launchctl list | grep -i wndr
-tail -80 ~/.ai-system/logs/wndr-stickers.err.log
+tail -80 ~/.wndr-stickers/logs/bot.err.log
 
 # квоты провайдеров — самая частая причина «бот молчит»
 ./.venv/bin/python - <<'PY'
@@ -85,7 +97,7 @@ except Exception as e:
     print("FAIL", e)
 PY
 
-sqlite3 ~/katya-ai/state/wndr-stickers/stickers.db \
+sqlite3 ~/.wndr-stickers/state/stickers.db \
   "select status, count(*) from requests group by status;"
 ```
 

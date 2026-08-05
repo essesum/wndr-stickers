@@ -26,12 +26,12 @@ async def main() -> int:
         print(f"{FAIL} TELEGRAM_BOT_TOKEN пуст — запусти scripts/set_token.sh")
         problems += 1
     if s.telegram_owner_id:
-        print(f"{OK} владелец бота: {s.telegram_owner_id}")
+        print(f"{OK} владелец бота настроен")
     else:
         print(f"{FAIL} TELEGRAM_OWNER_ID пуст")
         problems += 1
-    print(f"{OK} владелец пака: {s.sticker_pack_owner}")
-    print(f"{OK} модераторы: {sorted(s.moderators) or 'только владелец'}")
+    print(f"{OK} владелец пака настроен: {bool(s.sticker_pack_owner)}")
+    print(f"{OK} модераторов настроено: {len(s.moderators)}")
 
     print("\nСтиль")
     for label, path in (("референс", s.reference_sheet_path), ("шрифт", s.font_path)):
@@ -50,18 +50,15 @@ async def main() -> int:
             print(f"{FAIL} codex не найден в PATH")
             problems += 1
 
-    print("\nПамять сообщества")
+    print("\nЛокальный индекс повторов")
     if not s.duplicate_check:
         print(f"{WARN} проверка повторов выключена")
-    elif await community_memory.ensure_collection():
-        print(f"{OK} коллекция {community_memory.COLLECTION} доступна")
+    else:
         probe = await community_memory.embed("проверка")
         if probe:
-            print(f"{OK} эмбеддер отвечает ({len(probe)} измерений)")
+            print(f"{OK} SQLite-индекс изолирован; эмбеддер отвечает ({len(probe)} измерений)")
         else:
-            print(f"{WARN} эмбеддер молчит — повторы ловиться не будут")
-    else:
-        print(f"{WARN} Qdrant недоступен — повторы ловиться не будут")
+            print(f"{WARN} эмбеддер молчит — семантические повторы ловиться не будут")
 
     print("\nПути")
     print(f"{OK} стикеры: {s.stickers_dir}")

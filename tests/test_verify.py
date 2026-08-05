@@ -18,6 +18,23 @@ def test_good_sticker_passes(tmp_path):
     assert result.size == (512, 512)
 
 
+def test_official_palette_gate_accepts_wndr_orange(tmp_path):
+    path = save_webp(_canvas(), tmp_path / "wndr-orange.webp")
+    result = verify_sticker(path, enforce_style=True)
+    assert result.ok, result.problems
+    assert result.palette_fraction is not None
+    assert result.palette_fraction >= 0.85
+
+
+def test_official_palette_gate_rejects_unrelated_colour(tmp_path):
+    image = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+    image.alpha_composite(Image.new("RGBA", (400, 400), (0, 180, 255, 255)), (56, 56))
+    path = save_webp(image, tmp_path / "cyan.webp")
+    result = verify_sticker(path, enforce_style=True)
+    assert not result.ok
+    assert any("WNDR-контракта" in problem for problem in result.problems)
+
+
 def test_wrong_size_is_caught(tmp_path):
     path = save_webp(_canvas(bbox=(10, 10, 200, 200), size=(256, 256)), tmp_path / "small.webp")
     result = verify_sticker(path)

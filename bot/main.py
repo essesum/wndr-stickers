@@ -13,6 +13,7 @@ from bot.handlers import generate as generate_handlers
 from bot.handlers import moderation as moderation_handlers
 from skill.wndr_stickers.src.config import get_settings
 from skill.wndr_stickers.src.db import init_db
+from skill.wndr_stickers.src.instance_lock import AlreadyRunning, InstanceLock
 
 
 async def main() -> None:
@@ -33,6 +34,12 @@ async def main() -> None:
     if not settings.font_path.exists():
         raise SystemExit(f"Нет шрифта: {settings.font_path}")
 
+    lock = InstanceLock(settings.lock_path)
+    try:
+        lock.acquire()
+    except AlreadyRunning as exc:
+        raise SystemExit(str(exc)) from exc
+
     await init_db(settings.db_path)
     settings.stickers_dir.mkdir(parents=True, exist_ok=True)
     settings.raw_dir.mkdir(parents=True, exist_ok=True)
@@ -50,15 +57,18 @@ async def main() -> None:
     me = await bot.get_me()
     logging.info(
         "wndr-stickers запущен: @%s, доступ=%s, провайдеры=%s, "
-        "апрув=%s, модераторов=%d, владелец пака=%s",
+        "апрув=%s, модераторов=%d, владелец пака настроен=%s",
         me.username,
         settings.access_mode,
         settings.provider_chain,
         settings.require_approval,
         len(settings.moderators),
-        settings.sticker_pack_owner,
+        bool(settings.sticker_pack_owner),
     )
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        lock.release()
 
 
 if __name__ == "__main__":

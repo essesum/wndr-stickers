@@ -59,6 +59,20 @@ CREATE TABLE IF NOT EXISTS submissions (
     UNIQUE(sticker_id)
 );
 CREATE INDEX IF NOT EXISTS idx_submissions_status ON submissions(status, created_at);
+
+-- Локальный семантический индекс фраз сообщества. Никаких Telegram-ID/авторства.
+CREATE TABLE IF NOT EXISTS community_vectors (
+    sticker_id   INTEGER PRIMARY KEY REFERENCES stickers(id) ON DELETE CASCADE,
+    phrase       TEXT NOT NULL,
+    normalised   TEXT NOT NULL,
+    slug         TEXT NOT NULL,
+    version      INTEGER NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'created',
+    vector_json  TEXT NOT NULL,
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_community_vectors_normalised
+    ON community_vectors(normalised);
 """
 
 #: Колонки, добавленные после первого релиза. Ставим по одной, молча пропуская

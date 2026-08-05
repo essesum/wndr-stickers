@@ -4,6 +4,7 @@
 стиль по нему, а не по описанию словами. Буквы модель не рисует вообще.
 
 Провайдеры:
+  codex         — GPT image по подписке ChatGPT, в одноразовом HOME + Seatbelt
   openrouter_gpt — GPT image через OpenRouter (нужны кредиты на openrouter.ai)
   openai         — прямой api.openai.com, Responses API + tool image_generation
   gemini         — Google Gemini, работает и на бесплатном ключе
@@ -13,6 +14,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -74,7 +76,6 @@ def _raise_for_soft_failure(response: httpx.Response, provider: str) -> None:
 #: Встроенный инструмент image_gen у Codex не требует OPENAI_API_KEY — он ходит
 #: по той же подписке, что и обычный чат. Это основной путь: платить отдельно
 #: за картинки не нужно.
-CODEX_HOME = Path.home() / ".codex"
 CODEX_MODEL = "gpt-5.5"
 CODEX_TIMEOUT_S = 600
 
@@ -90,14 +91,28 @@ def codex_prompt(plate_prompt: str, filename: str = "plate.png") -> str:
 
 
 def build_codex_command(
-    *, workdir: str, reference: str, model: str, last_message: str
+    *,
+    workdir: str,
+    reference: str,
+    model: str,
+    last_message: str,
+    prompt: str,
+    sandbox_profile: str | None,
 ) -> list[str]:
-    """Аргументы codex exec. Модель прибиваем явно: в ~/.codex/config.toml может
-    лежать gpt-4.1, который с аккаунтом ChatGPT не работает."""
+    """Codex получает только temp-workdir и prompt, без Катиного home/context."""
+    prefix = (
+        ["/usr/bin/sandbox-exec", "-f", sandbox_profile]
+        if sandbox_profile is not None
+        else []
+    )
     return [
+        *prefix,
         "codex",
         "exec",
         "--skip-git-repo-check",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
         "-C",
         workdir,
         "-s",
@@ -108,10 +123,49 @@ def build_codex_command(
         reference,
         "-o",
         last_message,
+        prompt,
     ]
 
 
-def newest_generated_image(root: Path = CODEX_HOME / "generated_images") -> Path | None:
+def codex_sandbox_profile(real_home: Path) -> str:
+    """Seatbelt: нет доступа к Катиному home и локальным system services."""
+    escaped = str(real_home).replace("\\", "\\\\").replace('"', '\\"')
+    return (
+        "(version 1)\n"
+        "(allow default)\n"
+        f'(deny file-read* (subpath "{escaped}"))\n'
+        f'(deny file-write* (subpath "{escaped}"))\n'
+        '(deny network-outbound (remote tcp "localhost:6333"))\n'
+        '(deny network-outbound (remote tcp "localhost:6334"))\n'
+        '(deny network-outbound (remote tcp "localhost:8920"))\n'
+        '(deny network-outbound (remote tcp "localhost:11434"))\n'
+        '(deny network-outbound (remote tcp "localhost:49530"))\n'
+        '(deny network-outbound (remote tcp "localhost:10808"))\n'
+        '(deny network-outbound (remote tcp "localhost:10809"))\n'
+        '(deny network-outbound (remote tcp "localhost:10810"))\n'
+        '(deny network-outbound (remote tcp "localhost:10811"))\n'
+    )
+
+
+def codex_environment(isolated_home: Path) -> dict[str, str]:
+    """Allowlist окружения: ключи других провайдеров в Codex не наследуются."""
+    allowed = (
+        "PATH",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+        "USER",
+        "LOGNAME",
+    )
+    env = {key: os.environ[key] for key in allowed if os.environ.get(key)}
+    env["HOME"] = str(isolated_home)
+    env["CODEX_HOME"] = str(isolated_home)
+    return env
+
+
+def newest_generated_image(root: Path) -> Path | None:
     """Запасной путь: Codex сохраняет картинки к себе, даже если не скопировал."""
     if not root.exists():
         return None
@@ -127,21 +181,42 @@ def generate_codex(
     *,
     model: str = CODEX_MODEL,
     timeout: int = CODEX_TIMEOUT_S,
+    auth_source: Path | None = None,
 ) -> GeneratedImage:
     if shutil.which("codex") is None:
         raise ProviderUnavailable("codex: бинарь не найден в PATH")
 
     with tempfile.TemporaryDirectory(prefix="wndr-codex-") as tmp:
         workdir = Path(tmp)
+        isolated_home = workdir / "codex-home"
+        isolated_home.mkdir(mode=0o700)
+        source_auth = auth_source or (Path.home() / ".codex" / "auth.json")
+        if not source_auth.is_file():
+            raise ProviderUnavailable("codex: нет auth.json — выполни `codex login`")
+        isolated_auth = isolated_home / "auth.json"
+        shutil.copyfile(source_auth, isolated_auth)
+        isolated_auth.chmod(0o600)
+
+        local_reference = workdir / "reference.png"
+        shutil.copyfile(reference, local_reference)
+        profile_path = workdir / "codex.sb"
+        profile_path.write_text(codex_sandbox_profile(Path.home()), encoding="utf-8")
         target = workdir / "plate.png"
         last_message = workdir / "last.txt"
+        # LaunchAgent already runs the whole bot under Seatbelt. macOS forbids
+        # applying a nested sandbox, so inherit the stronger outer boundary.
+        # Direct/manual calls still apply the dedicated Codex profile here.
+        active_profile = (
+            None if os.environ.get("WNDR_RUNTIME_SANDBOX") == "1" else str(profile_path)
+        )
         command = build_codex_command(
             workdir=str(workdir),
-            reference=str(reference),
+            reference=str(local_reference),
             model=model,
             last_message=str(last_message),
+            prompt=prompt,
+            sandbox_profile=active_profile,
         )
-        started = newest_generated_image()
         try:
             proc = subprocess.run(  # noqa: S603 — аргументы собираем сами, shell не используем
                 command,
@@ -152,6 +227,8 @@ def generate_codex(
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                env=codex_environment(isolated_home),
+                cwd=workdir,
             )
         except subprocess.TimeoutExpired as exc:
             raise ProviderUnavailable(f"codex: не уложился в {timeout}с") from exc
@@ -168,8 +245,8 @@ def generate_codex(
             return GeneratedImage(data=target.read_bytes(), provider="codex", model=model)
 
         # Codex мог сгенерировать, но не скопировать — берём свежую из его хранилища.
-        latest = newest_generated_image()
-        if latest is not None and latest != started:
+        latest = newest_generated_image(isolated_home / "generated_images")
+        if latest is not None:
             return GeneratedImage(data=latest.read_bytes(), provider="codex", model=model)
 
         raise ImageGenerationError(f"codex: картинка не появилась. Хвост вывода:\n{tail}")

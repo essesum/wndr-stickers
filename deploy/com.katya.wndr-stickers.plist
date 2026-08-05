@@ -4,18 +4,16 @@
 <dict>
 	<key>EnvironmentVariables</key>
 	<dict>
-		<key>HTTPS_PROXY</key>
-		<string>http://127.0.0.1:10811</string>
-		<key>HTTP_PROXY</key>
-		<string>http://127.0.0.1:10811</string>
-		<key>NO_PROXY</key>
-		<string>localhost,127.0.0.1,::1,192.168.0.0/16</string>
 		<key>PATH</key>
 		<string>/Users/ekaterinasum/dev/wndr-stickers/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+		<key>PYTHONDONTWRITEBYTECODE</key>
+		<string>1</string>
 		<key>PYTHONUNBUFFERED</key>
 		<string>1</string>
 		<key>VIRTUAL_ENV</key>
 		<string>/Users/ekaterinasum/dev/wndr-stickers/.venv</string>
+		<key>WNDR_RUNTIME_SANDBOX</key>
+		<string>1</string>
 	</dict>
 	<key>KeepAlive</key>
 	<dict>
@@ -26,6 +24,9 @@
 	<string>com.katya.wndr-stickers</string>
 	<key>ProgramArguments</key>
 	<array>
+		<string>/usr/bin/sandbox-exec</string>
+		<string>-f</string>
+		<string>/Users/ekaterinasum/dev/wndr-stickers/deploy/wndr-stickers.sb</string>
 		<string>/Users/ekaterinasum/dev/wndr-stickers/.venv/bin/python</string>
 		<string>-m</string>
 		<string>bot.main</string>
@@ -33,11 +34,13 @@
 	<key>RunAtLoad</key>
 	<true/>
 	<key>StandardErrorPath</key>
-	<string>/Users/ekaterinasum/.ai-system/logs/wndr-stickers.err.log</string>
+	<string>/Users/ekaterinasum/.wndr-stickers/logs/bot.err.log</string>
 	<key>StandardOutPath</key>
-	<string>/Users/ekaterinasum/.ai-system/logs/wndr-stickers.log</string>
+	<string>/Users/ekaterinasum/.wndr-stickers/logs/bot.log</string>
 	<key>ThrottleInterval</key>
 	<integer>10</integer>
+	<key>Umask</key>
+	<integer>63</integer>
 	<key>WorkingDirectory</key>
 	<string>/Users/ekaterinasum/dev/wndr-stickers</string>
 </dict>

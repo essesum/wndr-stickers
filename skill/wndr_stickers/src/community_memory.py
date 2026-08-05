@@ -1,48 +1,25 @@
-"""Память сообщества: что уже было и что повторяется.
+"""Локальная память фраз сообщества.
 
-Отдельная коллекция Qdrant `wndr_community` — рядом с `katya_memory`, но не
-внутри неё. Это память сообщества, а не Кати: фразы посторонних людей не должны
-становиться её фактами.
-
-Слои по контракту системы: SQLite — истина, коллекция — перестраиваемый индекс
-поверх неё. Потеряли коллекцию — пересобрали из базы, ничего не потеряно.
-
-Персональных данных здесь нет: ни Telegram-ID, ни авторства. Они живут только
-в SQLite в `state/`.
-
-Все вызовы best-effort: недоступный Qdrant или Ollama не должен ронять бота —
-он лишь лишает его подсказки про повторы.
+SQLite бота — единственное хранилище. Векторы считаются внутри процесса
+детерминированным char-ngram алгоритмом; сеть и shared services не используются.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
 import unicodedata
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-import httpx
+import aiosqlite
+import numpy as np
 
 log = logging.getLogger(__name__)
 
-COLLECTION = "wndr_community"
-DIMS = 768
-DISTANCE = "Cosine"
-
-QDRANT_URL = "http://127.0.0.1:6333"
-OLLAMA_URL = "http://127.0.0.1:11434"
-EMBED_MODEL = "embeddinggemma:300m"
-TIMEOUT = 10.0
-
-#: Порог косинусной близости, за которым фраза считается повтором.
-#: Замер на живых фразах пака: перефразировки одной мысли дают 0.83–0.93
-#: («Пусть расцветают все цветы» -> 0.93, «Со мной всё окей» -> 0.83),
-#: посторонние фразы — 0.40–0.63. Порог поставлен в этот зазор.
+VECTOR_DIMENSIONS = 768
 DUPLICATE_THRESHOLD = 0.82
-
-#: Пространство имён для стабильных id точек: переиндексация не плодит дубли.
-_NAMESPACE = uuid.UUID("8f1d4c2a-6b3e-4f7a-9c1d-2e5b8a0f3d64")
 
 _PUNCT_RE = re.compile(r"[*«»\"'`]+")
 _SPACE_RE = re.compile(r"\s+")
@@ -58,152 +35,137 @@ class Similar:
 
 
 def normalise(phrase: str) -> str:
-    """Регистр, лишние пробелы и звёздочки акцента не делают фразу другой.
-
-    А вот «ё» против «е» и вопросительный знак — делают: это разные стикеры,
-    и правила пака на этот счёт однозначны.
-    """
     text = unicodedata.normalize("NFC", phrase)
     text = _PUNCT_RE.sub("", text)
-    text = _SPACE_RE.sub(" ", text).strip().lower()
-    return text
+    return _SPACE_RE.sub(" ", text).strip().lower()
 
 
 def same_phrase(a: str, b: str) -> bool:
-    """Точный повтор — ловим строкой, не тратя вызов эмбеддера."""
     return normalise(a) == normalise(b)
 
 
-def point_id(sticker_id: int) -> str:
-    return str(uuid.uuid5(_NAMESPACE, f"sticker:{sticker_id}"))
-
-
-def build_payload(
-    *, phrase: str, sticker_id: int, slug: str, version: int, status: str
-) -> dict:
-    """Только то, что нужно для поиска повторов. Никаких персональных данных."""
-    return {
-        "phrase": phrase,
-        "normalised": normalise(phrase),
-        "sticker_id": sticker_id,
-        "slug": slug,
-        "version": version,
-        "status": status,
-    }
-
-
 def decide_duplicate(matches: list[Similar], *, threshold: float = DUPLICATE_THRESHOLD):
-    """Ближайшее совпадение, если оно достаточно близко."""
     if not matches:
         return None
-    best = max(matches, key=lambda m: m.score)
+    best = max(matches, key=lambda match: match.score)
     return best if best.score >= threshold else None
 
 
-# --- сетевые адаптеры (best-effort) ------------------------------------------
-
-async def ensure_collection() -> bool:
-    try:
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            existing = await client.get(f"{QDRANT_URL}/collections/{COLLECTION}")
-            if existing.status_code == 200:
-                return True
-            created = await client.put(
-                f"{QDRANT_URL}/collections/{COLLECTION}",
-                json={"vectors": {"size": DIMS, "distance": DISTANCE}},
-            )
-            return created.status_code < 300
-    except Exception:
-        log.warning("память сообщества недоступна: не создал коллекцию", exc_info=True)
-        return False
-
-
 async def embed(text: str) -> list[float] | None:
-    try:
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            resp = await client.post(
-                f"{OLLAMA_URL}/api/embed", json={"model": EMBED_MODEL, "input": text}
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        vectors = data.get("embeddings") or ([data["embedding"]] if "embedding" in data else [])
-        return vectors[0] if vectors else None
-    except Exception:
-        log.warning("не смог посчитать эмбеддинг", exc_info=True)
+    """Локальный char-ngram vector: без модели, сети и shared services."""
+    value = normalise(text)
+    if not value:
         return None
+    padded = f"  {value}  "
+    vector = np.zeros(VECTOR_DIMENSIONS, dtype=np.float32)
+    for size in (2, 3, 4):
+        for offset in range(len(padded) - size + 1):
+            gram = padded[offset : offset + size].encode("utf-8")
+            digest = hashlib.blake2b(gram, digest_size=8).digest()
+            bucket = int.from_bytes(digest[:4], "big") % VECTOR_DIMENSIONS
+            sign = 1.0 if digest[4] & 1 else -1.0
+            vector[bucket] += sign
+    norm = float(np.linalg.norm(vector))
+    return (vector / norm).tolist() if norm else None
+
+
+def _cosine(left: list[float], right: list[float]) -> float:
+    a = np.asarray(left, dtype=np.float32)
+    b = np.asarray(right, dtype=np.float32)
+    if a.shape != b.shape or not a.size:
+        return 0.0
+    denominator = float(np.linalg.norm(a) * np.linalg.norm(b))
+    return float(np.dot(a, b) / denominator) if denominator else 0.0
 
 
 async def remember(
-    phrase: str, *, sticker_id: int, slug: str, version: int, status: str = "created"
+    db_path: Path,
+    phrase: str,
+    *,
+    sticker_id: int,
+    slug: str,
+    version: int,
+    status: str = "created",
 ) -> bool:
     vector = await embed(normalise(phrase))
-    if vector is None or not await ensure_collection():
-        return False
-    payload = build_payload(
-        phrase=phrase, sticker_id=sticker_id, slug=slug, version=version, status=status
-    )
-    try:
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            resp = await client.put(
-                f"{QDRANT_URL}/collections/{COLLECTION}/points",
-                params={"wait": "true"},
-                json={
-                    "points": [
-                        {"id": point_id(sticker_id), "vector": vector, "payload": payload}
-                    ]
-                },
-            )
-        return resp.status_code < 300
-    except Exception:
-        log.warning("не записал фразу в память сообщества", exc_info=True)
-        return False
-
-
-async def find_similar(phrase: str, *, limit: int = 3) -> list[Similar]:
-    vector = await embed(normalise(phrase))
     if vector is None:
-        return []
+        return False
     try:
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            resp = await client.post(
-                f"{QDRANT_URL}/collections/{COLLECTION}/points/search",
-                json={"vector": vector, "limit": limit, "with_payload": True},
+        async with aiosqlite.connect(db_path) as database:
+            await database.execute(
+                "INSERT OR REPLACE INTO community_vectors"
+                "(sticker_id, phrase, normalised, slug, version, status, vector_json) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (
+                    sticker_id,
+                    phrase,
+                    normalise(phrase),
+                    slug,
+                    version,
+                    status,
+                    json.dumps(vector, separators=(",", ":")),
+                ),
             )
-            if resp.status_code != 200:
-                return []
-            hits = resp.json().get("result", [])
+            await database.commit()
+        return True
     except Exception:
-        log.warning("поиск по памяти сообщества не удался", exc_info=True)
+        log.warning("не записал локальный индекс фраз", exc_info=True)
+        return False
+
+
+async def find_similar(db_path: Path, phrase: str, *, limit: int = 3) -> list[Similar]:
+    try:
+        async with aiosqlite.connect(db_path) as database:
+            cursor = await database.execute(
+                "SELECT sticker_id, phrase, normalised, slug, version, vector_json "
+                "FROM community_vectors"
+            )
+            rows = await cursor.fetchall()
+    except Exception:
+        log.warning("локальный индекс фраз недоступен", exc_info=True)
         return []
 
-    out = []
-    for hit in hits:
-        p = hit.get("payload") or {}
-        out.append(
-            Similar(
-                phrase=p.get("phrase", ""),
-                score=float(hit.get("score", 0.0)),
-                slug=p.get("slug", ""),
-                version=int(p.get("version", 0)),
-                sticker_id=int(p.get("sticker_id", 0)),
-            )
+    if not rows:
+        return []
+
+    wanted = normalise(phrase)
+    for sticker_id, saved_phrase, saved_normalised, slug, version, _vector in rows:
+        if saved_normalised == wanted:
+            return [Similar(saved_phrase, 1.0, slug, int(version), int(sticker_id))]
+
+    query_vector = await embed(wanted)
+    if query_vector is None:
+        return []
+
+    matches = [
+        Similar(
+            phrase=saved_phrase,
+            score=_cosine(query_vector, json.loads(vector_json)),
+            slug=slug,
+            version=int(version),
+            sticker_id=int(sticker_id),
         )
-    return out
+        for sticker_id, saved_phrase, _normalised, slug, version, vector_json in rows
+    ]
+    return sorted(matches, key=lambda match: match.score, reverse=True)[:limit]
 
 
 async def rebuild_from_db(db_path: Path) -> int:
-    """Коллекция — проекция. Пересобираем её из SQLite, который и есть истина."""
-    import aiosqlite
-
-    if not await ensure_collection():
-        return 0
+    """Пересобрать локальные vectors из канонической таблицы stickers."""
+    async with aiosqlite.connect(db_path) as database:
+        cursor = await database.execute("SELECT id, phrase, slug, version FROM stickers")
+        rows = await cursor.fetchall()
+        await database.execute("DELETE FROM community_vectors")
+        await database.commit()
     indexed = 0
-    async with aiosqlite.connect(db_path) as db:
-        cur = await db.execute("SELECT id, phrase, slug, version FROM stickers")
-        rows = await cur.fetchall()
     for sticker_id, phrase, slug, version in rows:
         if phrase and await remember(
-            phrase, sticker_id=sticker_id, slug=slug, version=version, status="rebuilt"
+            db_path,
+            phrase,
+            sticker_id=int(sticker_id),
+            slug=slug,
+            version=int(version),
+            status="rebuilt",
         ):
             indexed += 1
     return indexed

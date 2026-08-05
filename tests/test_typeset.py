@@ -36,7 +36,8 @@ def test_parse_accents_keeps_question_mark_only_when_given():
 
 
 def test_text_colour_contrasts_with_plate():
-    assert pick_text_color(BLACK) in (CREAM, (0xF7, 0xF3, 0xEA))
+    assert pick_text_color(BLACK) == CREAM
+    assert pick_text_color(ACCENT) == CREAM
     assert pick_text_color(CREAM) == BLACK
 
 
@@ -44,6 +45,12 @@ def test_accent_colour_differs_from_text_colour():
     text = pick_text_color(BLACK)
     accent = pick_accent_color(BLACK, text)
     assert accent != text
+
+
+def test_accent_colour_matches_canonical_pairings():
+    assert pick_accent_color(BLACK, CREAM) == ACCENT
+    assert pick_accent_color(CREAM, BLACK) == ACCENT
+    assert pick_accent_color(ACCENT, CREAM) == BLACK
 
 
 def test_contrast_ratio_is_symmetric_and_bounded():
