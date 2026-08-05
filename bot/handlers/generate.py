@@ -13,6 +13,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    User,
 )
 
 from bot.handlers import moderation
@@ -25,6 +26,7 @@ from skill.wndr_stickers.src import (
     pack,
     pipeline,
     ratelimit,
+    voice,
 )
 from skill.wndr_stickers.src import moderation as phrase_moderation
 from skill.wndr_stickers.src.config import Settings
@@ -84,10 +86,20 @@ async def _remove(m: Message, settings: Settings, phrase: str) -> None:
 
 
 async def _produce(
-    m: Message, settings: Settings, phrase: str, *, force: bool = False
+    m: Message,
+    settings: Settings,
+    phrase: str,
+    *,
+    force: bool = False,
+    requester: User | None = None,
 ) -> None:
-    """Сделать один стикер и отдать его в чат."""
-    user = m.from_user
+    """Сделать один стикер и отдать его в чат.
+
+    `requester` нужен для кнопок: сообщение под ними принадлежит боту, поэтому
+    `m.from_user` — это сам бот. Без явного автора квоты и авторство писались бы
+    на бота, а не на человека, который нажал кнопку.
+    """
+    user = requester or m.from_user
     assert user is not None
 
     if not settings.user_allowed(user.id):
@@ -126,7 +138,7 @@ async def _produce(
             await db.log_request(settings.db_path, user.id, phrase, "rejected", "duplicate")
             return
 
-    notice = await m.answer("Рисую плашку и набираю текст, это займёт полминуты…")
+    notice = await m.answer(voice.waiting())
     try:
         result = await asyncio.to_thread(pipeline.make_sticker, phrase, settings)
     except imagegen.ImageGenerationError as exc:
@@ -148,7 +160,7 @@ async def _produce(
     except Exception as exc:  # noqa: BLE001
         await db.log_request(settings.db_path, user.id, phrase, "failed", str(exc)[:500])
         log.exception("пайплайн упал")
-        await notice.edit_text(f"Что-то сломалось: {type(exc).__name__}. Попробуй ещё раз.")
+        await notice.edit_text(voice.failed())
         return
 
     request_id = await db.log_request(settings.db_path, user.id, phrase, "ok")
@@ -164,7 +176,7 @@ async def _produce(
         version=result.version,
     )
 
-    caption = f"«{result.phrase}»\nформа {result.shape} · кегль {result.font_size}"
+    caption = voice.done(result.phrase)
     await notice.delete()
     # документом — чтобы Telegram не пережал файл и он остался пригодным для пака
     await m.answer_document(
@@ -205,6 +217,10 @@ def build_router(settings: Settings) -> Router:
         if not got.addressed:
             return
 
+        if got.action is intent.Action.HELP:
+            await m.reply(voice.help_text(got.phrase))
+            return
+
         if got.action is intent.Action.LIST:
             rows = await db.pack_stickers(settings.db_path)
             await m.reply(
@@ -230,7 +246,16 @@ def build_router(settings: Settings) -> Router:
         row = await db.get_sticker(settings.db_path, sticker_id)
         if row is None or not isinstance(query.message, Message):
             return
-        await _produce(query.message, settings, row.phrase)
+        # force=True: кнопка и означает «сделай ещё один». Без этого проверка
+        # дублей отбивала собственную же кнопку — первое, что видит человек,
+        # нажавший «Ещё вариант», это отказ «похожее уже есть».
+        await _produce(
+            query.message,
+            settings,
+            row.phrase,
+            force=True,
+            requester=query.from_user,
+        )
 
     @router.callback_query(F.data.startswith("pack:"))
     async def _to_pack(query: CallbackQuery) -> None:

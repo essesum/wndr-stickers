@@ -163,3 +163,48 @@ def test_delete_through_a_mention():
 def test_without_bot_username_everything_is_addressed():
     """Обратная совместимость: не знаем имени бота — ведём себя как в личке."""
     assert parse("Со мной все нормально").addressed is True
+
+
+# --- вопрос о возможностях ----------------------------------------------------
+# «что ты умеешь?» ушло на стикер вместо ответа — стикер №4 в живой базе.
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "что ты умеешь?",
+        "Что ты умеешь",
+        "что умеешь?",
+        "что ты можешь",
+        "как пользоваться",
+        "как тобой пользоваться?",
+        "помощь",
+        "ты кто?",
+        "что это за бот",
+    ],
+)
+def test_question_about_the_bot_is_not_a_sticker(text):
+    got = parse(text)
+    assert got.action is Action.HELP, f"{text!r} должно быть вопросом, а не фразой"
+
+
+def test_help_keeps_the_original_text_for_the_reply():
+    """Ответ приглашает сделать стикер из этой же фразы, значит текст нужен."""
+    got = parse("что ты умеешь?")
+    assert got.phrase == "что ты умеешь?"
+
+
+def test_a_phrase_that_merely_contains_a_question_mark_is_still_a_sticker():
+    assert parse("Я получаю сейчас удовольствие?").action is Action.DRAW
+
+
+def test_forcing_turns_a_question_into_a_sticker():
+    """Если человек правда хочет стикер «что ты умеешь?» — «!» это разрешает."""
+    got = parse("!что ты умеешь?")
+    assert got.action is Action.DRAW
+    assert got.phrase == "что ты умеешь?"
+
+
+def test_help_works_through_a_mention():
+    got = parse(f"@{BOT} что ты умеешь?", bot_username=BOT)
+    assert got.action is Action.HELP
+    assert got.addressed is True

@@ -30,11 +30,29 @@ _LIST_PHRASES = (
 #: «из пака», «из стикерпака» — уточнение места, для разбора не значимо.
 _SCOPE_RE = re.compile(r"^\s*из\s+(?:стикер)?пак\w*\s*", re.IGNORECASE)
 
+#: Вопросы о самом боте. Живой случай: «что ты умеешь?» ушло на стикер вместо
+#: ответа. Сверяем всю фразу целиком, а не вхождение: «Я получаю сейчас
+#: удовольствие?» — это фраза пака, а не вопрос к боту.
+_HELP_RE = re.compile(
+    r"^(?:"
+    r"что\s+(?:ты\s+)?(?:умеешь|можешь|делаешь)"
+    r"|что\s+(?:это\s+)?за\s+бот"
+    r"|как\s+(?:тобой\s+)?(?:пользоваться|работать|работаешь)"
+    r"|как\s+это\s+работает"
+    r"|ты\s+(?:кто|что)"
+    r"|кто\s+ты"
+    r"|помощь|помоги|хелп|справка|инструкция"
+    r"|what\s+can\s+you\s+do|help"
+    r")\b[\s?!.]*$",
+    re.IGNORECASE,
+)
+
 
 class Action(Enum):
     DRAW = "draw"
     DELETE = "delete"
     LIST = "list"
+    HELP = "help"
 
 
 @dataclass(frozen=True)
@@ -95,6 +113,10 @@ def parse(
         raw = raw[1:].strip()
 
     lowered = raw.lower()
+    # «!» означает «я правда хочу такой стикер» — тогда вопрос не перехватываем.
+    if not force and _HELP_RE.match(raw):
+        return Intent(Action.HELP, raw, force, addressed)
+
     for marker in _LIST_PHRASES:
         if lowered.startswith(marker):
             return Intent(Action.LIST, "", force, addressed)
