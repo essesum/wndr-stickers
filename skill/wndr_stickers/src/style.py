@@ -36,10 +36,16 @@ class Shape:
 
 SHAPES: tuple[Shape, ...] = (
     Shape("rounded-rect", "a rounded rectangle plate", "нейтральный, много текста"),
-    Shape("wavy-blob", "a soft wavy speech blob with organic undulating edge", "мягкий, разговорный"),
+    Shape(
+        "wavy-blob",
+        "a soft wavy speech blob with organic undulating edge",
+        "мягкий, разговорный",
+    ),
     Shape("starburst", "a starburst explosion plate with sharp rays", "громкий, восклицание"),
     Shape("lightning", "a lightning-bolt banner, cut parallelogram", "дерзкий, панч"),
-    Shape("oval", "a decorative oval with a small botanical sprig", "торжественный, ироничный"),
+    Shape(
+        "oval", "a decorative oval with a small botanical sprig", "торжественный, ироничный"
+    ),
     Shape("stamp", "a rectangle with a zigzag postage-stamp edge", "документальный, билет"),
     Shape("cloud", "a rounded cloud plate with gentle bumps", "тёплый, обнимающий"),
     Shape("arrow", "an arrow / pointer badge", "вводит продолжение", is_arrow=True),

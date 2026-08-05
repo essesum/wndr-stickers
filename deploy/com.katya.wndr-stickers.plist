@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HTTPS_PROXY</key>
+		<string>http://127.0.0.1:10811</string>
+		<key>HTTP_PROXY</key>
+		<string>http://127.0.0.1:10811</string>
+		<key>NO_PROXY</key>
+		<string>localhost,127.0.0.1,::1,192.168.0.0/16</string>
+		<key>PATH</key>
+		<string>/Users/ekaterinasum/dev/wndr-stickers/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+		<key>PYTHONUNBUFFERED</key>
+		<string>1</string>
+		<key>VIRTUAL_ENV</key>
+		<string>/Users/ekaterinasum/dev/wndr-stickers/.venv</string>
+	</dict>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>Label</key>
+	<string>com.katya.wndr-stickers</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/ekaterinasum/dev/wndr-stickers/.venv/bin/python</string>
+		<string>-m</string>
+		<string>bot.main</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/ekaterinasum/.ai-system/logs/wndr-stickers.err.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/ekaterinasum/.ai-system/logs/wndr-stickers.log</string>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>WorkingDirectory</key>
+	<string>/Users/ekaterinasum/dev/wndr-stickers</string>
+</dict>
+</plist>

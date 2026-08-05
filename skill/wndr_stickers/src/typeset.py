@@ -37,7 +37,7 @@ class Layout:
 
 
 def parse_accents(phrase: str) -> tuple[str, list[Word]]:
-    """«Это не *тантра*» -> ('Это не тантра', [Word('Это'), Word('не'), Word('тантра', accent=True)])."""
+    """«Это не *тантра*» -> ('Это не тантра', [Word('Это'), Word('не'), Word('тантра', True)])."""
     words: list[Word] = []
     for raw in phrase.split():
         accent = bool(_ACCENT_RE.search(raw))
@@ -72,7 +72,7 @@ def pick_accent_color(
     background: tuple[int, int, int], text_color: tuple[int, int, int]
 ) -> tuple[int, int, int]:
     """Акцент — фирменный оранжевый; если он и есть фон/основной цвет, берём запасной."""
-    if contrast_ratio(ACCENT, background) >= 2.5 and ACCENT != text_color:
+    if contrast_ratio(ACCENT, background) >= 2.5 and text_color != ACCENT:
         return ACCENT
     fallback = CREAM if _relative_luminance(background) < 0.4 else BLACK
     return NEAR_WHITE if fallback == text_color else fallback
@@ -103,17 +103,37 @@ def _split_into_lines(words: list[Word], line_count: int) -> list[list[Word]]:
     return lines
 
 
+def _cap_height(font: ImageFont.FreeTypeFont) -> float:
+    """Высота прописной по чернилам, не по метрикам шрифта."""
+    top = font.getbbox("Н", anchor="ls")[1]
+    return abs(top)
+
+
 def _measure(
     lines: list[list[Word]], font: ImageFont.FreeTypeFont, spacing: int
 ) -> tuple[int, int, list[int]]:
-    widths = []
+    """Габариты блока по чернилам: строки прижаты друг к другу, без воздуха метрик.
+
+    Меряем от базовой линии (anchor="ls"), поэтому пустой запас сверху и снизу,
+    который Impact носит в метриках, в расчёт не идёт и кегль выходит крупнее.
+    """
+    widths: list[int] = []
+    tops: list[float] = []
+    bottoms: list[float] = []
     for line in lines:
         text = " ".join(w.text for w in line)
-        widths.append(int(font.getlength(text)))
-    ascent, descent = font.getmetrics()
-    line_height = ascent + descent
-    height = line_height * len(lines) + spacing * (len(lines) - 1)
-    return (max(widths) if widths else 0), height, widths
+        x0, y0, x1, y1 = font.getbbox(text, anchor="ls")
+        widths.append(int(x1 - x0))
+        tops.append(y0)
+        bottoms.append(y1)
+
+    if not widths:
+        return 0, 0, []
+
+    step = _cap_height(font) + spacing
+    # верх блока — над базовой линией первой строки, низ — под последней
+    height = int((len(lines) - 1) * step + (bottoms[-1] - tops[0]))
+    return max(widths), height, widths
 
 
 def fit_text(
@@ -169,23 +189,26 @@ def render(
     draw = ImageDraw.Draw(out)
     font = ImageFont.truetype(font_path, layout.font_size)
     spacing = int(layout.font_size * LINE_SPACING)
-    ascent, descent = font.getmetrics()
-    line_height = ascent + descent
 
-    total_height = line_height * len(layout.lines) + spacing * (len(layout.lines) - 1)
-    y = rect.top + (rect.height - total_height) // 2
+    texts = [" ".join(w.text for w in line) for line in layout.lines]
+    boxes = [font.getbbox(t, anchor="ls") for t in texts]
+    step = _cap_height(font) + spacing
+
+    # Центрируем блок по чернилам: верх — над базовой линией первой строки.
+    block_height = (len(texts) - 1) * step + (boxes[-1][3] - boxes[0][1])
+    first_baseline = rect.top + (rect.height - block_height) / 2 - boxes[0][1]
 
     space_width = font.getlength(" ")
-    for line in layout.lines:
-        line_width = font.getlength(" ".join(w.text for w in line))
-        x = rect.left + (rect.width - line_width) / 2
+    for index, line in enumerate(layout.lines):
+        baseline = first_baseline + index * step
+        x0, _, x1, _ = boxes[index]
+        x = rect.left + (rect.width - (x1 - x0)) / 2 - x0
         for i, word in enumerate(line):
             colour = accent_color if word.accent else text_color
-            draw.text((x, y), word.text, font=font, fill=(*colour, 255))
+            draw.text((x, baseline), word.text, font=font, fill=(*colour, 255), anchor="ls")
             x += font.getlength(word.text)
             if i < len(line) - 1:
                 x += space_width
-        y += line_height + spacing
     return out
 
 

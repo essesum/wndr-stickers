@@ -1,0 +1,187 @@
+"""Состояние бота: кто что просил, что сгенерировано, что уехало в пак."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+import aiosqlite
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    user_id     INTEGER PRIMARY KEY,
+    username    TEXT,
+    first_seen  TEXT NOT NULL DEFAULT (datetime('now')),
+    banned      INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS requests (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL,
+    phrase      TEXT NOT NULL,
+    status      TEXT NOT NULL,               -- ok | rejected | failed
+    detail      TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_requests_user_time ON requests(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_requests_time ON requests(created_at);
+
+CREATE TABLE IF NOT EXISTS stickers (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id  INTEGER REFERENCES requests(id),
+    user_id     INTEGER NOT NULL,
+    slug        TEXT NOT NULL,
+    version     INTEGER NOT NULL,
+    phrase      TEXT NOT NULL,
+    path        TEXT NOT NULL,
+    raw_path    TEXT,
+    provider    TEXT,
+    model       TEXT,
+    shape       TEXT,
+    in_pack     INTEGER NOT NULL DEFAULT 0,
+    emoji       TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(slug, version)
+);
+"""
+
+
+@dataclass
+class StickerRow:
+    id: int
+    slug: str
+    version: int
+    phrase: str
+    path: str
+    in_pack: bool
+
+
+async def init_db(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    async with aiosqlite.connect(path) as db:
+        await db.executescript(SCHEMA)
+        await db.commit()
+
+
+async def touch_user(path: Path, user_id: int, username: str | None) -> bool:
+    """Регистрируем пользователя. Возвращаем False, если он забанен."""
+    async with aiosqlite.connect(path) as db:
+        await db.execute(
+            "INSERT INTO users(user_id, username) VALUES(?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET username=excluded.username",
+            (user_id, username),
+        )
+        await db.commit()
+        cur = await db.execute("SELECT banned FROM users WHERE user_id=?", (user_id,))
+        row = await cur.fetchone()
+    return not (row and row[0])
+
+
+async def log_request(
+    path: Path, user_id: int, phrase: str, status: str, detail: str | None = None
+) -> int:
+    async with aiosqlite.connect(path) as db:
+        cur = await db.execute(
+            "INSERT INTO requests(user_id, phrase, status, detail) VALUES(?,?,?,?)",
+            (user_id, phrase, status, detail),
+        )
+        await db.commit()
+        return int(cur.lastrowid or 0)
+
+
+async def count_requests(path: Path, *, user_id: int | None, hours: int) -> int:
+    """Сколько удачных генераций за последние N часов."""
+    window = f"-{hours} hours"
+    async with aiosqlite.connect(path) as db:
+        if user_id is None:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM requests WHERE status='ok' "
+                "AND created_at >= datetime('now', ?)",
+                (window,),
+            )
+        else:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM requests WHERE status='ok' AND user_id=? "
+                "AND created_at >= datetime('now', ?)",
+                (user_id, window),
+            )
+        row = await cur.fetchone()
+    return int(row[0]) if row else 0
+
+
+async def save_sticker(path: Path, *, request_id: int, user_id: int, result) -> int:
+    async with aiosqlite.connect(path) as db:
+        cur = await db.execute(
+            "INSERT OR REPLACE INTO stickers"
+            "(request_id, user_id, slug, version, phrase, path, raw_path, provider, model, shape)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                request_id,
+                user_id,
+                result.slug,
+                result.version,
+                result.phrase,
+                str(result.path),
+                str(result.raw_path),
+                result.provider,
+                result.model,
+                result.shape,
+            ),
+        )
+        await db.commit()
+        return int(cur.lastrowid or 0)
+
+
+async def mark_in_pack(path: Path, sticker_id: int, emoji: str) -> None:
+    async with aiosqlite.connect(path) as db:
+        await db.execute(
+            "UPDATE stickers SET in_pack=1, emoji=? WHERE id=?", (emoji, sticker_id)
+        )
+        await db.commit()
+
+
+async def get_sticker(path: Path, sticker_id: int) -> StickerRow | None:
+    async with aiosqlite.connect(path) as db:
+        cur = await db.execute(
+            "SELECT id, slug, version, phrase, path, in_pack FROM stickers WHERE id=?",
+            (sticker_id,),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return None
+    return StickerRow(row[0], row[1], row[2], row[3], row[4], bool(row[5]))
+
+
+async def pack_stickers(path: Path) -> list[StickerRow]:
+    async with aiosqlite.connect(path) as db:
+        cur = await db.execute(
+            "SELECT id, slug, version, phrase, path, in_pack FROM stickers "
+            "WHERE in_pack=1 ORDER BY created_at"
+        )
+        rows = await cur.fetchall()
+    return [StickerRow(r[0], r[1], r[2], r[3], r[4], bool(r[5])) for r in rows]
+
+
+async def set_banned(path: Path, user_id: int, banned: bool) -> None:
+    async with aiosqlite.connect(path) as db:
+        await db.execute(
+            "INSERT INTO users(user_id, banned) VALUES(?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET banned=excluded.banned",
+            (user_id, int(banned)),
+        )
+        await db.commit()
+
+
+async def stats(path: Path) -> dict:
+    async with aiosqlite.connect(path) as db:
+        out = {}
+        for key, sql in {
+            "users": "SELECT COUNT(*) FROM users",
+            "stickers": "SELECT COUNT(*) FROM stickers",
+            "in_pack": "SELECT COUNT(*) FROM stickers WHERE in_pack=1",
+            "today": "SELECT COUNT(*) FROM requests WHERE status='ok' "
+            "AND created_at >= datetime('now','-24 hours')",
+        }.items():
+            cur = await db.execute(sql)
+            row = await cur.fetchone()
+            out[key] = int(row[0]) if row else 0
+    return out

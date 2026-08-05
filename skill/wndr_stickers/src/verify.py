@@ -64,7 +64,9 @@ def verify_text(rendered_phrase: str, requested_phrase: str) -> VerifyResult:
     """Посимвольная сверка. При впечатывании кодом расхождение означает баг у нас."""
     problems: list[str] = []
     if rendered_phrase != requested_phrase:
-        problems.append(f"текст разошёлся: набрано {rendered_phrase!r}, просили {requested_phrase!r}")
+        problems.append(
+            f"текст разошёлся: набрано {rendered_phrase!r}, просили {requested_phrase!r}"
+        )
         for i, (a, b) in enumerate(zip(rendered_phrase, requested_phrase, strict=False)):
             if a != b:
                 problems.append(f"первое расхождение на позиции {i}: {a!r} вместо {b!r}")
