@@ -80,6 +80,8 @@ CREATE INDEX IF NOT EXISTS idx_community_vectors_normalised
 _MIGRATIONS = (
     "ALTER TABLE users ADD COLUMN trusted INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE stickers ADD COLUMN pack_name TEXT",
+    # Telegram адресует стикер в наборе по file_id — без него удалить нечем.
+    "ALTER TABLE stickers ADD COLUMN file_id TEXT",
 )
 
 
@@ -91,6 +93,8 @@ class StickerRow:
     phrase: str
     path: str
     in_pack: bool
+    file_id: str | None = None
+    pack_name: str | None = None
 
 
 @dataclass
@@ -187,37 +191,75 @@ async def save_sticker(path: Path, *, request_id: int, user_id: int, result) -> 
         return int(cur.lastrowid or 0)
 
 
+_STICKER_COLUMNS = "id, slug, version, phrase, path, in_pack, file_id, pack_name"
+
+
+def _sticker(row) -> StickerRow:
+    return StickerRow(row[0], row[1], row[2], row[3], row[4], bool(row[5]), row[6], row[7])
+
+
 async def mark_in_pack(
-    path: Path, sticker_id: int, emoji: str, pack: str | None = None
+    path: Path,
+    sticker_id: int,
+    emoji: str,
+    pack: str | None = None,
+    file_id: str | None = None,
 ) -> None:
     async with aiosqlite.connect(path) as db:
         await db.execute(
-            "UPDATE stickers SET in_pack=1, emoji=?, pack_name=? WHERE id=?",
-            (emoji, pack, sticker_id),
+            "UPDATE stickers SET in_pack=1, emoji=?, pack_name=?, file_id=? WHERE id=?",
+            (emoji, pack, file_id, sticker_id),
         )
         await db.commit()
+
+
+async def mark_removed_from_pack(path: Path, sticker_id: int) -> None:
+    """Стикер убран из набора. Файл на диске остаётся — можно вернуть обратно."""
+    async with aiosqlite.connect(path) as db:
+        await db.execute(
+            "UPDATE stickers SET in_pack=0, file_id=NULL WHERE id=?", (sticker_id,)
+        )
+        await db.commit()
+
+
+async def find_in_pack(path: Path, phrase: str) -> StickerRow | None:
+    """Ищем по фразе среди тех, что реально лежат в паке.
+
+    Регистр и лишние пробелы не считаются различием: человек пишет «удали
+    я так чувствую», а в базе «Я так чувствую». Если версий несколько, берём
+    последнюю добавленную — именно она сейчас в наборе.
+    """
+    needle = " ".join(phrase.split()).casefold()
+    if not needle:
+        return None
+    async with aiosqlite.connect(path) as db:
+        cur = await db.execute(
+            f"SELECT {_STICKER_COLUMNS} FROM stickers WHERE in_pack=1 "
+            "ORDER BY created_at DESC, id DESC"
+        )
+        rows = await cur.fetchall()
+    for row in rows:
+        if " ".join((row[3] or "").split()).casefold() == needle:
+            return _sticker(row)
+    return None
 
 
 async def get_sticker(path: Path, sticker_id: int) -> StickerRow | None:
     async with aiosqlite.connect(path) as db:
         cur = await db.execute(
-            "SELECT id, slug, version, phrase, path, in_pack FROM stickers WHERE id=?",
-            (sticker_id,),
+            f"SELECT {_STICKER_COLUMNS} FROM stickers WHERE id=?", (sticker_id,)
         )
         row = await cur.fetchone()
-    if not row:
-        return None
-    return StickerRow(row[0], row[1], row[2], row[3], row[4], bool(row[5]))
+    return _sticker(row) if row else None
 
 
 async def pack_stickers(path: Path) -> list[StickerRow]:
     async with aiosqlite.connect(path) as db:
         cur = await db.execute(
-            "SELECT id, slug, version, phrase, path, in_pack FROM stickers "
-            "WHERE in_pack=1 ORDER BY created_at"
+            f"SELECT {_STICKER_COLUMNS} FROM stickers WHERE in_pack=1 ORDER BY created_at"
         )
         rows = await cur.fetchall()
-    return [StickerRow(r[0], r[1], r[2], r[3], r[4], bool(r[5])) for r in rows]
+    return [_sticker(r) for r in rows]
 
 
 # --- апрув -------------------------------------------------------------------

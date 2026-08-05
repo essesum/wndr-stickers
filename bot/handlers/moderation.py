@@ -127,7 +127,7 @@ def build_router(settings: Settings) -> Router:
 
         me = await bot.get_me()
         try:
-            name, link = await pack.add_with_overflow(
+            name, link, file_id = await pack.add_with_overflow(
                 bot,
                 owner_id=settings.sticker_pack_owner,
                 slug=settings.pack_slug,
@@ -144,7 +144,7 @@ def build_router(settings: Settings) -> Router:
             return
 
         await db.mark_in_pack(
-            settings.db_path, submission.sticker_id, settings.default_emoji, name
+            settings.db_path, submission.sticker_id, settings.default_emoji, name, file_id
         )
         pack.rebuild_zip(settings.stickers_dir, settings.zip_path)
         await query.answer("Добавлено")

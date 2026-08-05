@@ -115,7 +115,7 @@ async def add_with_overflow(
     sticker_path: Path,
     emoji: str,
     max_packs: int = 50,
-) -> tuple[str, str]:
+) -> tuple[str, str, str | None]:
     """Кладём стикер, переходя в следующий пак, когда текущий заполнен.
 
     Возвращаем (имя набора, ссылка). Владельцем всех наборов остаётся owner_id —
@@ -143,7 +143,16 @@ async def add_with_overflow(
                         emoji_list=[emoji],
                     ),
                 )
-            return name, f"https://t.me/addstickers/{name}"
+            # file_id последнего стикера в наборе — им Telegram адресует
+            # удаление. Без него убрать стикер из пака невозможно.
+            file_id = None
+            try:
+                current = await bot.get_sticker_set(name=name)
+                if current.stickers:
+                    file_id = current.stickers[-1].file_id
+            except Exception:  # noqa: BLE001 — не смогли узнать, добавление уже прошло
+                log.warning("не получил file_id только что добавленного стикера")
+            return name, f"https://t.me/addstickers/{name}", file_id
         except TelegramBadRequest as exc:
             if is_pack_full(exc):
                 log.info("пак %s заполнен, перехожу к следующему", name)

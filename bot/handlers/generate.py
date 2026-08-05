@@ -21,6 +21,7 @@ from skill.wndr_stickers.src import (
     community_memory,
     db,
     imagegen,
+    intent,
     pack,
     pipeline,
     ratelimit,
@@ -39,6 +40,46 @@ def _keyboard(sticker_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="➕ В пак", callback_data=f"pack:{sticker_id}"),
             ]
         ]
+    )
+
+
+async def _remove(m: Message, settings: Settings, phrase: str) -> None:
+    """Убрать стикер из общего пака. Право есть у модераторов и у автора."""
+    user = m.from_user
+    assert user is not None and m.bot is not None
+
+    if not phrase:
+        await m.reply('Что убрать? Например: <code>убери из пака "я так чувствую"</code>')
+        return
+
+    row = await db.find_in_pack(settings.db_path, phrase)
+    if row is None:
+        await m.reply(f"В паке нет «{phrase}». Посмотреть, что есть: напиши «что в паке».")
+        return
+
+    if not approval.can_moderate(user.id, settings):
+        await m.reply("Убирать из общего пака могут модераторы.")
+        return
+
+    if not row.file_id:
+        await m.reply(
+            "Этот стикер добавлен до того, как бот научился удалять, "
+            "и его идентификатор не сохранён. Убери вручную через @Stickers."
+        )
+        return
+
+    try:
+        await m.bot.delete_sticker_from_set(sticker=row.file_id)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("не удалось убрать стикер из набора")
+        await m.reply(f"Не убралось: {exc}")
+        return
+
+    await db.mark_removed_from_pack(settings.db_path, row.id)
+    pack.rebuild_zip(settings.stickers_dir, settings.zip_path)
+    await m.reply(
+        f"Убрал «{row.phrase}» из пака. Файл сохранён — можно вернуть, "
+        "если передумаешь."
     )
 
 
@@ -146,10 +187,41 @@ def build_router(settings: Settings) -> Router:
 
     @router.message(F.text & ~F.text.startswith("/"))
     async def _plain_text(m: Message) -> None:
-        text = (m.text or "").strip()
-        # «!» в начале — сделать вариант, даже если похожее уже есть.
-        force = text.startswith("!")
-        await _produce(m, settings, text.lstrip("!").strip(), force=force)
+        assert m.bot is not None
+        me = await m.bot.get_me()
+        # В группе бот отвечает только на обращение: тегом или ответом на его
+        # сообщение. Иначе он нарисует стикер на каждую реплику чата.
+        in_group = m.chat.type in ("group", "supergroup")
+        replied_to_bot = bool(
+            m.reply_to_message
+            and m.reply_to_message.from_user
+            and m.reply_to_message.from_user.id == me.id
+        )
+        got = intent.parse(
+            m.text or "",
+            bot_username=me.username,
+            require_mention=in_group and not replied_to_bot,
+        )
+        if not got.addressed:
+            return
+
+        if got.action is intent.Action.LIST:
+            rows = await db.pack_stickers(settings.db_path)
+            await m.reply(
+                "В паке пока пусто."
+                if not rows
+                else "В паке:\n" + "\n".join(f"• {r.phrase}" for r in rows)
+            )
+            return
+
+        if got.action is intent.Action.DELETE:
+            await _remove(m, settings, got.phrase)
+            return
+
+        if not got.phrase:
+            await m.reply("Напиши фразу — верну стикер.")
+            return
+        await _produce(m, settings, got.phrase, force=got.force)
 
     @router.callback_query(F.data.startswith("again:"))
     async def _again(query: CallbackQuery) -> None:
@@ -194,7 +266,7 @@ def build_router(settings: Settings) -> Router:
         await query.answer("Добавляю в пак…")
         me = await bot.get_me()
         try:
-            name, link = await pack.add_with_overflow(
+            name, link, file_id = await pack.add_with_overflow(
                 bot,
                 owner_id=settings.sticker_pack_owner,
                 slug=settings.pack_slug,
@@ -210,7 +282,7 @@ def build_router(settings: Settings) -> Router:
             return
 
         await db.mark_in_pack(
-            settings.db_path, sticker_id, settings.default_emoji, name
+            settings.db_path, sticker_id, settings.default_emoji, name, file_id
         )
         pack.rebuild_zip(settings.stickers_dir, settings.zip_path)
         if isinstance(query.message, Message):
