@@ -10,6 +10,7 @@ from aiogram.enums import ParseMode
 
 from bot.handlers import commands as commands_handlers
 from bot.handlers import generate as generate_handlers
+from bot.handlers import moderation as moderation_handlers
 from skill.wndr_stickers.src.config import get_settings
 from skill.wndr_stickers.src.db import init_db
 
@@ -42,14 +43,20 @@ async def main() -> None:
     )
     dp = Dispatcher()
     dp.include_router(commands_handlers.build_router(settings))
+    # Модерация раньше генерации: её кнопки не должны перехватываться текстом.
+    dp.include_router(moderation_handlers.build_router(settings))
     dp.include_router(generate_handlers.build_router(settings))
 
     me = await bot.get_me()
     logging.info(
-        "wndr-stickers запущен: @%s, доступ=%s, провайдеры=%s",
+        "wndr-stickers запущен: @%s, доступ=%s, провайдеры=%s, "
+        "апрув=%s, модераторов=%d, владелец пака=%s",
         me.username,
         settings.access_mode,
         settings.provider_chain,
+        settings.require_approval,
+        len(settings.moderators),
+        settings.sticker_pack_owner,
     )
     await dp.start_polling(bot)
 

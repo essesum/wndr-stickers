@@ -22,8 +22,10 @@ class Settings(BaseSettings):
     access_mode: str = "open"  # open | allowlist
     allowed_user_ids: str = ""
 
-    # Генерация картинок
-    image_provider_chain: str = "openrouter_gpt,gemini"
+    # Генерация картинок.
+    # codex — GPT image по подписке ChatGPT через Codex CLI, без API-ключа.
+    image_provider_chain: str = "codex,openrouter_gpt,gemini"
+    codex_model: str = "gpt-5.5"
     openrouter_api_key: str = ""
     openrouter_image_model: str = "openai/gpt-5-image"
     openai_api_key: str = ""
@@ -40,8 +42,26 @@ class Settings(BaseSettings):
 
     # Стикерпак
     pack_slug: str = "wndr"
-    pack_title: str = "WNDR — More Life"
+    pack_title: str = "WNDR Stickers"
     default_emoji: str = "🔥"
+    #: Владелец набора в Telegram. Отдельно от админа бота — набор передаётся
+    #: другому человеку правкой одной строки, код при этом не меняется.
+    pack_owner_id: int = 0
+    #: Лимит Telegram на статичный набор; дальше заводим следующий пак.
+    pack_capacity: int = 120
+
+    # Память сообщества: ловим повторы до генерации
+    duplicate_check: bool = True
+    duplicate_threshold: float = 0.82
+
+    # Апрув
+    require_approval: bool = True
+    moderator_ids: str = ""
+    #: После скольких одобренных стикеров автор добавляет в пак без очереди.
+    #: 0 — доверие не выдаётся никогда.
+    auto_trust_after: int = 3
+    #: Чат, куда падают заявки. 0 — рассылаем модераторам в личку.
+    moderation_chat_id: int = 0
 
     # Квоты
     rate_per_user_hour: int = 5
@@ -50,7 +70,10 @@ class Settings(BaseSettings):
 
     # Пути
     state_dir: Path = Path("~/katya-ai/state/wndr-stickers").expanduser()
-    output_dir: Path = Path("~/katya-ai/work/wndr-stickers").expanduser()
+    #: Зона community/ — данные сообщества, а не Кати. Персональные данные
+    #: (Telegram-ID, авторство) живут только в SQLite в state_dir и сюда не
+    #: попадают: в память сеется единственный файл _context.md.
+    output_dir: Path = Path("~/katya-ai/community/wndr-stickers").expanduser()
 
     @property
     def db_path(self) -> Path:
@@ -77,6 +100,28 @@ class Settings(BaseSettings):
     @property
     def provider_chain(self) -> list[str]:
         return [p.strip() for p in self.image_provider_chain.split(",") if p.strip()]
+
+    @property
+    def moderators(self) -> set[int]:
+        """Список модераторов. Владелец бота всегда среди них."""
+        out = self._ids(self.moderator_ids)
+        if self.telegram_owner_id:
+            out.add(self.telegram_owner_id)
+        return out
+
+    @property
+    def sticker_pack_owner(self) -> int:
+        """Кому принадлежит набор. По умолчанию — владельцу бота."""
+        return self.pack_owner_id or self.telegram_owner_id
+
+    @staticmethod
+    def _ids(raw: str) -> set[int]:
+        out: set[int] = set()
+        for chunk in raw.replace(";", ",").split(","):
+            chunk = chunk.strip()
+            if chunk.lstrip("-").isdigit():
+                out.add(int(chunk))
+        return out
 
     @property
     def allowlist(self) -> set[int]:

@@ -16,9 +16,29 @@ from aiogram.types import FSInputFile, InputSticker
 log = logging.getLogger(__name__)
 
 
-def pack_name(slug: str, bot_username: str) -> str:
-    """Telegram требует, чтобы имя набора заканчивалось на _by_<botusername>."""
-    return f"{slug}_by_{bot_username}"
+def pack_name(slug: str, bot_username: str, index: int = 1) -> str:
+    """Telegram требует, чтобы имя набора заканчивалось на _by_<botusername>.
+
+    Статичный набор вмещает 120 стикеров, поэтому пак с номером 2 и дальше —
+    это продолжение, а не отдельный проект.
+    """
+    base = slug if index <= 1 else f"{slug}_{index}"
+    return f"{base}_by_{bot_username}"
+
+
+def pack_title(base: str, index: int = 1) -> str:
+    return base if index <= 1 else f"{base} ({index})"
+
+
+def is_pack_full(exc: Exception) -> bool:
+    """Набор упёрся в лимит Telegram — надо заводить продолжение."""
+    text = str(exc).upper()
+    return "STICKERS_TOO_MUCH" in text or "STICKERSET_TOO_MUCH" in text
+
+
+def is_pack_missing(exc: Exception) -> bool:
+    """Набора ещё нет — его надо создать."""
+    return "STICKERSET_INVALID" in str(exc).upper()
 
 
 async def ensure_pack(
@@ -35,7 +55,7 @@ async def ensure_pack(
         await bot.get_sticker_set(name=name)
         return False
     except TelegramBadRequest as exc:
-        if "STICKERSET_INVALID" not in str(exc).upper():
+        if not is_pack_missing(exc):
             raise
 
     await bot.create_new_sticker_set(
@@ -83,6 +103,53 @@ async def add_to_pack(
             ),
         )
     return f"https://t.me/addstickers/{name}"
+
+
+async def add_with_overflow(
+    bot: Bot,
+    *,
+    owner_id: int,
+    slug: str,
+    bot_username: str,
+    title: str,
+    sticker_path: Path,
+    emoji: str,
+    max_packs: int = 50,
+) -> tuple[str, str]:
+    """Кладём стикер, переходя в следующий пак, когда текущий заполнен.
+
+    Возвращаем (имя набора, ссылка). Владельцем всех наборов остаётся owner_id —
+    это требование Telegram, а не привязка проекта к человеку: сменить владельца
+    можно одной строкой в конфиге.
+    """
+    for index in range(1, max_packs + 1):
+        name = pack_name(slug, bot_username, index)
+        try:
+            created = await ensure_pack(
+                bot,
+                owner_id=owner_id,
+                name=name,
+                title=pack_title(title, index),
+                first_sticker=sticker_path,
+                emoji=emoji,
+            )
+            if not created:
+                await bot.add_sticker_to_set(
+                    user_id=owner_id,
+                    name=name,
+                    sticker=InputSticker(
+                        sticker=FSInputFile(sticker_path),
+                        format="static",
+                        emoji_list=[emoji],
+                    ),
+                )
+            return name, f"https://t.me/addstickers/{name}"
+        except TelegramBadRequest as exc:
+            if is_pack_full(exc):
+                log.info("пак %s заполнен, перехожу к следующему", name)
+                continue
+            raise
+    raise RuntimeError(f"все {max_packs} наборов заполнены")
 
 
 def rebuild_zip(stickers_dir: Path, zip_path: Path) -> tuple[Path, int]:

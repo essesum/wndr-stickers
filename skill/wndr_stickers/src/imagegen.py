@@ -13,6 +13,9 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,6 +68,108 @@ def _raise_for_soft_failure(response: httpx.Response, provider: str) -> None:
     if response.status_code in (401, 402, 403, 429):
         detail = response.text[:300]
         raise ProviderUnavailable(f"{provider}: HTTP {response.status_code} — {detail}")
+
+
+# --- Codex CLI (GPT image по подписке ChatGPT) -------------------------------
+#: Встроенный инструмент image_gen у Codex не требует OPENAI_API_KEY — он ходит
+#: по той же подписке, что и обычный чат. Это основной путь: платить отдельно
+#: за картинки не нужно.
+CODEX_HOME = Path.home() / ".codex"
+CODEX_MODEL = "gpt-5.5"
+CODEX_TIMEOUT_S = 600
+
+CODEX_INSTRUCTION = (
+    "\n\nGenerate this image now using your built-in image_gen tool, then copy the "
+    "final PNG into the current working directory as exactly ./{filename}. "
+    "Reply with only the absolute path of that file."
+)
+
+
+def codex_prompt(plate_prompt: str, filename: str = "plate.png") -> str:
+    return plate_prompt + CODEX_INSTRUCTION.format(filename=filename)
+
+
+def build_codex_command(
+    *, workdir: str, reference: str, model: str, last_message: str
+) -> list[str]:
+    """Аргументы codex exec. Модель прибиваем явно: в ~/.codex/config.toml может
+    лежать gpt-4.1, который с аккаунтом ChatGPT не работает."""
+    return [
+        "codex",
+        "exec",
+        "--skip-git-repo-check",
+        "-C",
+        workdir,
+        "-s",
+        "workspace-write",
+        "-m",
+        model,
+        "-i",
+        reference,
+        "-o",
+        last_message,
+    ]
+
+
+def newest_generated_image(root: Path = CODEX_HOME / "generated_images") -> Path | None:
+    """Запасной путь: Codex сохраняет картинки к себе, даже если не скопировал."""
+    if not root.exists():
+        return None
+    images = list(root.rglob("*.png"))
+    if not images:
+        return None
+    return max(images, key=lambda p: p.stat().st_mtime)
+
+
+def generate_codex(
+    prompt: str,
+    reference: Path,
+    *,
+    model: str = CODEX_MODEL,
+    timeout: int = CODEX_TIMEOUT_S,
+) -> GeneratedImage:
+    if shutil.which("codex") is None:
+        raise ProviderUnavailable("codex: бинарь не найден в PATH")
+
+    with tempfile.TemporaryDirectory(prefix="wndr-codex-") as tmp:
+        workdir = Path(tmp)
+        target = workdir / "plate.png"
+        last_message = workdir / "last.txt"
+        command = build_codex_command(
+            workdir=str(workdir),
+            reference=str(reference),
+            model=model,
+            last_message=str(last_message),
+        )
+        started = newest_generated_image()
+        try:
+            proc = subprocess.run(  # noqa: S603 — аргументы собираем сами, shell не используем
+                command,
+                input="",
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ProviderUnavailable(f"codex: не уложился в {timeout}с") from exc
+
+        tail = (proc.stderr or proc.stdout or "")[-600:]
+        if "401" in tail or "Unauthorized" in tail or "refresh token" in tail:
+            raise ProviderUnavailable(
+                "codex: авторизация протухла — выполни `codex login`"
+            )
+        if "not supported when using Codex with a ChatGPT account" in tail:
+            raise ProviderUnavailable(f"codex: модель {model} недоступна на подписке")
+
+        if target.exists():
+            return GeneratedImage(data=target.read_bytes(), provider="codex", model=model)
+
+        # Codex мог сгенерировать, но не скопировать — берём свежую из его хранилища.
+        latest = newest_generated_image()
+        if latest is not None and latest != started:
+            return GeneratedImage(data=latest.read_bytes(), provider="codex", model=model)
+
+        raise ImageGenerationError(f"codex: картинка не появилась. Хвост вывода:\n{tail}")
 
 
 # --- OpenRouter (GPT image) --------------------------------------------------
@@ -239,6 +344,12 @@ def generate(prompt: str, reference: Path, settings) -> GeneratedImage:
 
     for name in settings.provider_chain:
         try:
+            if name == "codex":
+                return generate_codex(
+                    codex_prompt(prompt),
+                    reference,
+                    model=settings.codex_model,
+                )
             if name == "openrouter_gpt":
                 return generate_openrouter(
                     prompt,

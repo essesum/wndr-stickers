@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import (
-    BufferedInputFile,
     CallbackQuery,
     FSInputFile,
     InlineKeyboardButton,
@@ -15,7 +15,17 @@ from aiogram.types import (
     Message,
 )
 
-from skill.wndr_stickers.src import db, imagegen, moderation, pack, pipeline, ratelimit
+from bot.handlers import moderation
+from skill.wndr_stickers.src import (
+    approval,
+    community_memory,
+    db,
+    imagegen,
+    pack,
+    pipeline,
+    ratelimit,
+)
+from skill.wndr_stickers.src import moderation as phrase_moderation
 from skill.wndr_stickers.src.config import Settings
 
 log = logging.getLogger(__name__)
@@ -32,7 +42,9 @@ def _keyboard(sticker_id: int) -> InlineKeyboardMarkup:
     )
 
 
-async def _produce(m: Message, settings: Settings, phrase: str) -> None:
+async def _produce(
+    m: Message, settings: Settings, phrase: str, *, force: bool = False
+) -> None:
     """Сделать один стикер и отдать его в чат."""
     user = m.from_user
     assert user is not None
@@ -45,7 +57,7 @@ async def _produce(m: Message, settings: Settings, phrase: str) -> None:
         await m.answer("Доступ закрыт.")
         return
 
-    verdict = moderation.check_phrase(phrase)
+    verdict = phrase_moderation.check_phrase(phrase)
     if not verdict:
         await db.log_request(settings.db_path, user.id, phrase, "rejected", verdict.reason)
         await m.answer(verdict.reason)
@@ -56,6 +68,22 @@ async def _produce(m: Message, settings: Settings, phrase: str) -> None:
         await db.log_request(settings.db_path, user.id, phrase, "rejected", allowance.reason)
         await m.answer(allowance.reason)
         return
+
+    # Проверяем повтор ДО генерации: так не тратим вызов модели на то,
+    # что в паке уже есть. Память сообщества недоступна — просто идём дальше.
+    if settings.duplicate_check:
+        similar = await community_memory.find_similar(phrase)
+        hit = community_memory.decide_duplicate(
+            similar, threshold=settings.duplicate_threshold
+        )
+        if hit is not None and not force:
+            await m.answer(
+                f"Похожее уже есть: «{hit.phrase}» ({hit.slug}-v{hit.version}).\n"
+                "Если всё равно нужен свой вариант — пришли фразу ещё раз "
+                "с «!» в начале."
+            )
+            await db.log_request(settings.db_path, user.id, phrase, "rejected", "duplicate")
+            return
 
     notice = await m.answer("Рисую плашку и набираю текст, это займёт полминуты…")
     try:
@@ -77,6 +105,13 @@ async def _produce(m: Message, settings: Settings, phrase: str) -> None:
     request_id = await db.log_request(settings.db_path, user.id, phrase, "ok")
     sticker_id = await db.save_sticker(
         settings.db_path, request_id=request_id, user_id=user.id, result=result
+    )
+    # Запоминаем фразу, чтобы следующий такой же запрос поймался как повтор.
+    await community_memory.remember(
+        result.phrase,
+        sticker_id=sticker_id,
+        slug=result.slug,
+        version=result.version,
     )
 
     caption = f"«{result.phrase}»\nформа {result.shape} · кегль {result.font_size}"
@@ -105,7 +140,10 @@ def build_router(settings: Settings) -> Router:
 
     @router.message(F.text & ~F.text.startswith("/"))
     async def _plain_text(m: Message) -> None:
-        await _produce(m, settings, (m.text or "").strip())
+        text = (m.text or "").strip()
+        # «!» в начале — сделать вариант, даже если похожее уже есть.
+        force = text.startswith("!")
+        await _produce(m, settings, text.lstrip("!").strip(), force=force)
 
     @router.callback_query(F.data.startswith("again:"))
     async def _again(query: CallbackQuery) -> None:
@@ -127,18 +165,34 @@ def build_router(settings: Settings) -> Router:
             await query.answer("Уже в паке")
             return
 
-        await query.answer("Добавляю в пак…")
+        user = query.from_user
         bot = query.bot
         assert bot is not None
-        me = await bot.get_me()
-        name = pack.pack_name(settings.pack_slug, me.username or "")
-        from pathlib import Path
 
+        # Модераторы и доверенные кладут сразу, остальные — через очередь.
+        if await approval.needs_approval(settings.db_path, settings, user.id):
+            submission_id = await db.create_submission(
+                settings.db_path, sticker_id, user.id
+            )
+            delivered = await moderation.notify_moderators(bot, settings, submission_id)
+            await query.answer("Отправила на апрув")
+            if isinstance(query.message, Message):
+                await query.message.answer(
+                    "Заявка ушла модераторам"
+                    + (f" ({delivered})" if delivered else ", но никто не получил — "
+                       "проверь MODERATOR_IDS")
+                    + ". Файл уже твой, ждать его не нужно."
+                )
+            return
+
+        await query.answer("Добавляю в пак…")
+        me = await bot.get_me()
         try:
-            link = await pack.add_to_pack(
+            name, link = await pack.add_with_overflow(
                 bot,
-                owner_id=settings.telegram_owner_id,
-                name=name,
+                owner_id=settings.sticker_pack_owner,
+                slug=settings.pack_slug,
+                bot_username=me.username or "",
                 title=settings.pack_title,
                 sticker_path=Path(row.path),
                 emoji=settings.default_emoji,
@@ -149,7 +203,9 @@ def build_router(settings: Settings) -> Router:
                 await query.message.answer(f"В пак не уехало: {exc}")
             return
 
-        await db.mark_in_pack(settings.db_path, sticker_id, settings.default_emoji)
+        await db.mark_in_pack(
+            settings.db_path, sticker_id, settings.default_emoji, name
+        )
         pack.rebuild_zip(settings.stickers_dir, settings.zip_path)
         if isinstance(query.message, Message):
             await query.message.answer(f"Готово, стикер в паке:\n{link}")
@@ -157,4 +213,4 @@ def build_router(settings: Settings) -> Router:
     return router
 
 
-__all__ = ["build_router", "BufferedInputFile"]
+__all__ = ["build_router"]
