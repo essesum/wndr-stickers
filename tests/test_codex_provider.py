@@ -57,6 +57,35 @@ def test_codex_prompt_demands_a_named_output_file():
     assert "image_gen" in prompt
 
 
+def test_stdin_is_closed_not_empty(tmp_path, monkeypatch):
+    """input="" Codex принимает за подключённый stdin и лезет читать промпт оттуда,
+    игнорируя аргумент: «Reading prompt from stdin... No prompt provided via stdin».
+    Нужен именно закрытый stdin."""
+    import subprocess
+
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs)
+
+        class R:
+            stdout = ""
+            stderr = ""
+
+        return R()
+
+    monkeypatch.setattr(imagegen.shutil, "which", lambda _: "/usr/bin/codex")
+    monkeypatch.setattr(imagegen.subprocess, "run", fake_run)
+    ref = tmp_path / "ref.png"
+    ref.write_bytes(b"x")
+
+    with pytest.raises(imagegen.ImageGenerationError):
+        imagegen.generate_codex("prompt", ref)
+
+    assert seen.get("stdin") is subprocess.DEVNULL, "stdin должен быть закрыт"
+    assert "input" not in seen, "input= заставляет Codex читать промпт из stdin"
+
+
 def test_missing_binary_is_a_soft_failure(tmp_path, monkeypatch):
     """Нет codex в PATH — это повод пойти к следующему провайдеру, а не упасть."""
     monkeypatch.setattr(imagegen.shutil, "which", lambda _: None)

@@ -145,7 +145,10 @@ def generate_codex(
         try:
             proc = subprocess.run(  # noqa: S603 — аргументы собираем сами, shell не используем
                 command,
-                input="",
+                # Именно закрытый stdin, а не input="": пустой ввод Codex
+                # принимает за подключённый канал и читает промпт оттуда,
+                # игнорируя аргумент («No prompt provided via stdin»).
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
