@@ -4,6 +4,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -100,6 +101,24 @@ class Settings(BaseSettings):
     @property
     def provider_chain(self) -> list[str]:
         return [p.strip() for p in self.image_provider_chain.split(",") if p.strip()]
+
+    @field_validator(
+        "telegram_owner_id",
+        "pack_owner_id",
+        "moderation_chat_id",
+        "pack_capacity",
+        "auto_trust_after",
+        mode="before",
+    )
+    @classmethod
+    def _blank_means_zero(cls, value):
+        """В .env.example эти поля документированы пустыми — пустое читаем как 0.
+
+        Без этого бот падал на старте у всякого, кто скопировал образец как есть.
+        """
+        if isinstance(value, str) and not value.strip():
+            return 0
+        return value
 
     @property
     def moderators(self) -> set[int]:
