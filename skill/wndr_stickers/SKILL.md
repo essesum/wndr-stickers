@@ -102,6 +102,23 @@ PY
 
 sqlite3 ~/.wndr-stickers/state/stickers.db \
   "select status, count(*) from requests group by status;"
+
+# Публичный ZIP должен совпадать с активным общим паком, а не со всеми черновиками.
+./.venv/bin/python - <<'PY'
+import asyncio, zipfile
+from pathlib import Path
+from skill.wndr_stickers.src.config import get_settings
+from skill.wndr_stickers.src import db
+async def main():
+    s = get_settings()
+    rows = await db.pack_stickers(s.db_path)
+    active = sorted(Path(r.path).name for r in rows if Path(r.path).is_file())
+    zipped = sorted(zipfile.ZipFile(s.zip_path).namelist()) if s.zip_path.exists() else []
+    print('active_db=', active)
+    print('zip=', zipped)
+    print('match=', active == zipped)
+asyncio.run(main())
+PY
 ```
 
 `402` от OpenRouter — кончились кредиты, пополнять на openrouter.ai.
