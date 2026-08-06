@@ -5,7 +5,7 @@ import asyncio
 import logging
 from pathlib import Path
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
@@ -16,9 +16,7 @@ from aiogram.types import (
     User,
 )
 
-from bot.handlers import moderation
 from skill.wndr_stickers.src import (
-    approval,
     community_memory,
     db,
     imagegen,
@@ -32,6 +30,7 @@ from skill.wndr_stickers.src import moderation as phrase_moderation
 from skill.wndr_stickers.src.config import Settings
 
 log = logging.getLogger(__name__)
+PACK_MUTATION_LOCK = asyncio.Lock()
 
 
 def _keyboard(sticker_id: int) -> InlineKeyboardMarkup:
@@ -45,8 +44,26 @@ def _keyboard(sticker_id: int) -> InlineKeyboardMarkup:
     )
 
 
+async def _rebuild_public_zip(settings: Settings) -> None:
+    rows = await db.pack_stickers(settings.db_path)
+    pack.rebuild_zip(
+        settings.stickers_dir,
+        settings.zip_path,
+        active_paths=(Path(row.path) for row in rows),
+    )
+
+
+async def _cooldown_left(settings: Settings, sticker_id: int, user_id: int) -> int:
+    if user_id == settings.telegram_owner_id:
+        return 0
+    elapsed = await db.seconds_since_last_community_action(settings.db_path, sticker_id)
+    if elapsed is None:
+        return 0
+    return max(0, settings.pack_action_cooldown_seconds - elapsed)
+
+
 async def _remove(m: Message, settings: Settings, phrase: str) -> None:
-    """Убрать стикер из общего пака. Право есть у модераторов и у автора."""
+    """Убрать стикер из общего пака; действие открыто и обратимо."""
     user = m.from_user
     assert user is not None and m.bot is not None
 
@@ -59,8 +76,10 @@ async def _remove(m: Message, settings: Settings, phrase: str) -> None:
         await m.reply(f"В паке нет «{phrase}». Посмотреть, что есть: напиши «что в паке».")
         return
 
-    if not approval.can_moderate(user.id, settings):
-        await m.reply("Убирать из общего пака могут модераторы.")
+    if not settings.user_allowed(user.id) or not await db.touch_user(
+        settings.db_path, user.id, user.username
+    ):
+        await m.reply("Доступ закрыт.")
         return
 
     if not row.file_id:
@@ -70,19 +89,108 @@ async def _remove(m: Message, settings: Settings, phrase: str) -> None:
         )
         return
 
-    try:
-        await m.bot.delete_sticker_from_set(sticker=row.file_id)
-    except Exception as exc:  # noqa: BLE001
-        log.exception("не удалось убрать стикер из набора")
-        await m.reply(f"Не убралось: {exc}")
-        return
+    async with PACK_MUTATION_LOCK:
+        fresh = await db.get_sticker(settings.db_path, row.id)
+        if fresh is None or not fresh.in_pack:
+            await m.reply("Его уже убрали — можно вернуть командой «верни в пак …».")
+            return
+        if user.id != settings.telegram_owner_id:
+            used = await db.count_community_actions(
+                settings.db_path, user_id=user.id, action="removed", hours=24
+            )
+            if used >= settings.rate_removals_per_user_day:
+                await m.reply("На сегодня хватит удалений. Сообщество — не кнопочный тир.")
+                return
+        cooldown = await _cooldown_left(settings, row.id, user.id)
+        if cooldown:
+            await m.reply(f"Подожди {cooldown} сек., чтобы пак не дёргался туда-сюда.")
+            return
+        if not await db.claim_pack_operation(settings.db_path, row.id, "removing"):
+            await m.reply("Этот стикер уже кто-то меняет. Попробуй через минуту.")
+            return
+        try:
+            assert fresh.file_id is not None
+            await m.bot.delete_sticker_from_set(sticker=fresh.file_id)
+        except Exception:  # noqa: BLE001
+            await db.release_pack_operation(settings.db_path, row.id, "removing")
+            log.exception("не удалось убрать стикер из набора")
+            await m.reply("Не убралось. Состояние не потеряно — попробуй ещё раз.")
+            return
 
-    await db.mark_removed_from_pack(settings.db_path, row.id)
-    pack.rebuild_zip(settings.stickers_dir, settings.zip_path)
+        await db.mark_removed_from_pack(settings.db_path, row.id)
+        await db.log_community_action(settings.db_path, row.id, user.id, "removed")
+        await _rebuild_public_zip(settings)
     await m.reply(
-        f"Убрал «{row.phrase}» из пака. Файл сохранён — можно вернуть, "
-        "если передумаешь."
+        f"Убрал «{row.phrase}». Файл сохранён: любой участник может вернуть его "
+        "командой «верни в пак»."
     )
+
+
+async def _add_row_to_pack(
+    bot: Bot,
+    settings: Settings,
+    row: db.StickerRow,
+    user: User,
+    *,
+    restoring: bool,
+) -> tuple[bool, str]:
+    """Добавить/вернуть стикер; сериализовано и идемпотентно."""
+    operation = "restoring" if restoring else "adding"
+    action = "restored" if restoring else "added"
+    async with PACK_MUTATION_LOCK:
+        fresh = await db.get_sticker(settings.db_path, row.id)
+        if fresh is None:
+            return False, "Стикер потерялся."
+        if fresh.in_pack:
+            return True, "Он уже в паке."
+        cooldown = await _cooldown_left(settings, row.id, user.id)
+        if cooldown:
+            return False, f"Подожди {cooldown} сек., чтобы пак не дёргался туда-сюда."
+        if not await db.claim_pack_operation(settings.db_path, row.id, operation):
+            return False, "Этот стикер уже кто-то меняет. Попробуй через минуту."
+
+        me = await bot.get_me()
+        try:
+            name, link, file_id = await pack.add_with_overflow(
+                bot,
+                owner_id=settings.sticker_pack_owner,
+                slug=settings.pack_slug,
+                bot_username=me.username or "",
+                title=settings.pack_title,
+                sticker_path=Path(fresh.path),
+                emoji=settings.default_emoji,
+            )
+        except Exception:  # noqa: BLE001
+            await db.release_pack_operation(settings.db_path, row.id, operation)
+            log.exception("не удалось добавить стикер в пак")
+            return False, "В пак не уехало. Состояние сохранено — попробуй ещё раз."
+
+        await db.mark_in_pack(
+            settings.db_path, row.id, settings.default_emoji, name, file_id
+        )
+        await db.log_community_action(settings.db_path, row.id, user.id, action, name)
+        await _rebuild_public_zip(settings)
+        verb = "Вернул" if restoring else "Добавил"
+        return True, f"{verb} «{fresh.phrase}» в общий пак:\n{link}"
+
+
+async def _restore(m: Message, settings: Settings, phrase: str) -> None:
+    user = m.from_user
+    assert user is not None and m.bot is not None
+    if not phrase:
+        await m.reply('Что вернуть? Например: <code>верни в пак "я так чувствую"</code>')
+        return
+    if not settings.user_allowed(user.id) or not await db.touch_user(
+        settings.db_path, user.id, user.username
+    ):
+        await m.reply("Доступ закрыт.")
+        return
+    row = await db.find_removed(settings.db_path, phrase)
+    if row is None:
+        await m.reply(f"Не нашёл удалённый стикер «{phrase}».")
+        return
+    _, message = await _add_row_to_pack(m.bot, settings, row, user, restoring=True)
+    await m.reply(message)
 
 
 async def _produce(
@@ -92,6 +200,7 @@ async def _produce(
     *,
     force: bool = False,
     requester: User | None = None,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> None:
     """Сделать один стикер и отдать его в чат.
 
@@ -116,12 +225,6 @@ async def _produce(
         await m.answer(verdict.reason)
         return
 
-    allowance = await ratelimit.check(settings.db_path, settings, user.id)
-    if not allowance:
-        await db.log_request(settings.db_path, user.id, phrase, "rejected", allowance.reason)
-        await m.answer(allowance.reason)
-        return
-
     # Проверяем повтор ДО генерации: так не тратим вызов модели на то,
     # что в паке уже есть. Память сообщества недоступна — просто идём дальше.
     if settings.duplicate_check:
@@ -138,11 +241,21 @@ async def _produce(
             await db.log_request(settings.db_path, user.id, phrase, "rejected", "duplicate")
             return
 
+    allowance = await ratelimit.reserve(settings.db_path, settings, user.id, phrase)
+    if not allowance or allowance.request_id is None:
+        await m.answer(allowance.reason)
+        return
+    request_id = allowance.request_id
+
     notice = await m.answer(voice.waiting())
     try:
-        result = await asyncio.to_thread(pipeline.make_sticker, phrase, settings)
+        if semaphore is None:
+            result = await asyncio.to_thread(pipeline.make_sticker, phrase, settings)
+        else:
+            async with semaphore:
+                result = await asyncio.to_thread(pipeline.make_sticker, phrase, settings)
     except imagegen.ImageGenerationError as exc:
-        await db.log_request(settings.db_path, user.id, phrase, "failed", str(exc)[:500])
+        await db.update_request(settings.db_path, request_id, "failed", str(exc)[:500])
         log.error("генерация не удалась: %s", exc)
         await notice.edit_text(
             "Картинку сделать не вышло — все провайдеры отказали. "
@@ -150,7 +263,7 @@ async def _produce(
         )
         return
     except pipeline.StickerVerificationError as exc:
-        await db.log_request(settings.db_path, user.id, phrase, "failed", str(exc)[:500])
+        await db.update_request(settings.db_path, request_id, "failed", str(exc)[:500])
         log.warning("вариант отклонён WNDR style gate: %s", exc)
         await notice.edit_text(
             "Вариант не прошёл проверку фирменного стиля WNDR, поэтому я его не отправляю. "
@@ -158,12 +271,12 @@ async def _produce(
         )
         return
     except Exception as exc:  # noqa: BLE001
-        await db.log_request(settings.db_path, user.id, phrase, "failed", str(exc)[:500])
+        await db.update_request(settings.db_path, request_id, "failed", str(exc)[:500])
         log.exception("пайплайн упал")
         await notice.edit_text(voice.failed())
         return
 
-    request_id = await db.log_request(settings.db_path, user.id, phrase, "ok")
+    await db.update_request(settings.db_path, request_id, "ok")
     sticker_id = await db.save_sticker(
         settings.db_path, request_id=request_id, user_id=user.id, result=result
     )
@@ -188,6 +301,7 @@ async def _produce(
 
 def build_router(settings: Settings) -> Router:
     router = Router(name="generate")
+    generation_slots = asyncio.Semaphore(max(1, settings.max_concurrent_generations))
 
     @router.message(Command("sticker"))
     async def _explicit(m: Message, command: Command) -> None:
@@ -195,7 +309,7 @@ def build_router(settings: Settings) -> Router:
         if not phrase:
             await m.answer("Напиши так: <code>/sticker Со мной все нормально</code>")
             return
-        await _produce(m, settings, phrase)
+        await _produce(m, settings, phrase, semaphore=generation_slots)
 
     @router.message(F.text & ~F.text.startswith("/"))
     async def _plain_text(m: Message) -> None:
@@ -234,10 +348,16 @@ def build_router(settings: Settings) -> Router:
             await _remove(m, settings, got.phrase)
             return
 
+        if got.action is intent.Action.RESTORE:
+            await _restore(m, settings, got.phrase)
+            return
+
         if not got.phrase:
             await m.reply("Напиши фразу — верну стикер.")
             return
-        await _produce(m, settings, got.phrase, force=got.force)
+        await _produce(
+            m, settings, got.phrase, force=got.force, semaphore=generation_slots
+        )
 
     @router.callback_query(F.data.startswith("again:"))
     async def _again(query: CallbackQuery) -> None:
@@ -255,6 +375,7 @@ def build_router(settings: Settings) -> Router:
             row.phrase,
             force=True,
             requester=query.from_user,
+            semaphore=generation_slots,
         )
 
     @router.callback_query(F.data.startswith("pack:"))
@@ -271,47 +392,16 @@ def build_router(settings: Settings) -> Router:
         user = query.from_user
         bot = query.bot
         assert bot is not None
-
-        # Модераторы и доверенные кладут сразу, остальные — через очередь.
-        if await approval.needs_approval(settings.db_path, settings, user.id):
-            submission_id = await db.create_submission(
-                settings.db_path, sticker_id, user.id
-            )
-            delivered = await moderation.notify_moderators(bot, settings, submission_id)
-            await query.answer("Отправила на апрув")
-            if isinstance(query.message, Message):
-                await query.message.answer(
-                    "Заявка ушла модераторам"
-                    + (f" ({delivered})" if delivered else ", но никто не получил — "
-                       "проверь MODERATOR_IDS")
-                    + ". Файл уже твой, ждать его не нужно."
-                )
+        if not settings.user_allowed(user.id) or not await db.touch_user(
+            settings.db_path, user.id, user.username
+        ):
+            await query.answer("Доступ закрыт", show_alert=True)
             return
 
         await query.answer("Добавляю в пак…")
-        me = await bot.get_me()
-        try:
-            name, link, file_id = await pack.add_with_overflow(
-                bot,
-                owner_id=settings.sticker_pack_owner,
-                slug=settings.pack_slug,
-                bot_username=me.username or "",
-                title=settings.pack_title,
-                sticker_path=Path(row.path),
-                emoji=settings.default_emoji,
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.exception("не удалось добавить в пак")
-            if isinstance(query.message, Message):
-                await query.message.answer(f"В пак не уехало: {exc}")
-            return
-
-        await db.mark_in_pack(
-            settings.db_path, sticker_id, settings.default_emoji, name, file_id
-        )
-        pack.rebuild_zip(settings.stickers_dir, settings.zip_path)
+        _, message = await _add_row_to_pack(bot, settings, row, user, restoring=False)
         if isinstance(query.message, Message):
-            await query.message.answer(f"Готово, стикер в паке:\n{link}")
+            await query.message.answer(message)
 
     return router
 

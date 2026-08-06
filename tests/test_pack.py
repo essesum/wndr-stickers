@@ -46,3 +46,18 @@ def test_rebuild_zip_on_empty_dir(tmp_path):
     stickers.mkdir()
     _, count = rebuild_zip(stickers, tmp_path / "out.zip")
     assert count == 0
+
+
+def test_public_zip_can_exclude_private_drafts(tmp_path):
+    stickers = tmp_path / "stickers"
+    stickers.mkdir()
+    public = stickers / "public.webp"
+    draft = stickers / "draft.webp"
+    public.write_bytes(b"public")
+    draft.write_bytes(b"draft")
+    archive, count = rebuild_zip(
+        stickers, tmp_path / "out.zip", active_paths=[public]
+    )
+    assert count == 1
+    with zipfile.ZipFile(archive) as opened:
+        assert opened.namelist() == ["public.webp"]

@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from skill.wndr_stickers.src import db, ratelimit
@@ -71,6 +73,38 @@ async def test_remaining_counts_down(settings):
     after = await ratelimit.remaining(settings.db_path, settings, 222)
     assert after["hour"] == before["hour"] - 1
     assert after["day"] == before["day"] - 1
+
+
+async def test_concurrent_requests_cannot_all_pass_one_slot(tmp_path):
+    s = Settings(
+        telegram_owner_id=111,
+        state_dir=tmp_path,
+        rate_per_user_hour=1,
+        rate_per_user_day=1,
+        rate_global_day=1,
+    )
+    await db.init_db(s.db_path)
+    results = await asyncio.gather(
+        *(ratelimit.reserve(s.db_path, s, 222, f"фраза {i}") for i in range(8))
+    )
+    allowed = [result for result in results if result]
+    assert len(allowed) == 1
+    assert allowed[0].request_id is not None
+
+
+async def test_failed_reservation_releases_quota(tmp_path):
+    s = Settings(
+        telegram_owner_id=111,
+        state_dir=tmp_path,
+        rate_per_user_hour=1,
+        rate_per_user_day=1,
+        rate_global_day=1,
+    )
+    await db.init_db(s.db_path)
+    first = await ratelimit.reserve(s.db_path, s, 222, "первая")
+    assert first.request_id is not None
+    await db.update_request(s.db_path, first.request_id, "failed", "provider down")
+    assert await ratelimit.reserve(s.db_path, s, 222, "вторая")
 
 
 async def test_access_mode_allowlist(tmp_path):

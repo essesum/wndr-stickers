@@ -1,6 +1,7 @@
 """Community duplicate memory is local SQLite, never Katya's shared memory."""
 from pathlib import Path
 
+import aiosqlite
 import pytest
 
 from skill.wndr_stickers.src import community_memory as cm
@@ -38,6 +39,12 @@ def test_exact_repeat_normalisation():
 async def test_vectors_live_in_bot_sqlite_only(tmp_path, monkeypatch):
     path = tmp_path / "stickers.db"
     await db.init_db(path)
+    async with aiosqlite.connect(path) as database:
+        await database.execute(
+            "INSERT INTO stickers(id,user_id,slug,version,phrase,path,raw_path) "
+            "VALUES(7,1,'so-mnoy',2,'Со мной все нормально','/tmp/a.webp','/tmp/a.png')"
+        )
+        await database.commit()
 
     async def fake_embed(text):
         return [1.0, 0.0] if "норм" in text else [0.0, 1.0]
@@ -52,6 +59,9 @@ async def test_vectors_live_in_bot_sqlite_only(tmp_path, monkeypatch):
     )
     assert saved
 
+    # Черновик остаётся приватным: память сообщества видит только общий пак.
+    assert await cm.find_similar(path, "нормально", limit=3) == []
+    await db.mark_in_pack(path, 7, "✨", "wndr", "file-7")
     hits = await cm.find_similar(path, "нормально", limit=3)
     assert hits and hits[0].sticker_id == 7
     assert hits[0].score == pytest.approx(1.0)

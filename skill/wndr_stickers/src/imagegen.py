@@ -68,8 +68,9 @@ _RETRY = retry(
 def _raise_for_soft_failure(response: httpx.Response, provider: str) -> None:
     """402/429/401/403 — повод перейти к следующему провайдеру, а не падать."""
     if response.status_code in (401, 402, 403, 429):
-        detail = response.text[:300]
-        raise ProviderUnavailable(f"{provider}: HTTP {response.status_code} — {detail}")
+        # Ответ провайдера может содержать request context или отражённые данные.
+        # В SQLite/логи уходит только стабильный код, не сырое тело ответа.
+        raise ProviderUnavailable(f"{provider}: HTTP {response.status_code}")
 
 
 # --- Codex CLI (GPT image по подписке ChatGPT) -------------------------------

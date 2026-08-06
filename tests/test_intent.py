@@ -208,3 +208,20 @@ def test_help_works_through_a_mention():
     got = parse(f"@{BOT} что ты умеешь?", bot_username=BOT)
     assert got.action is Action.HELP
     assert got.addressed is True
+
+
+def test_natural_how_do_you_work_is_help():
+    assert parse("как ты работаешь?").action is Action.HELP
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'верни в пак "я так чувствую"',
+        "восстанови из стикерпака «я так чувствую»",
+    ],
+)
+def test_restore_is_not_drawn_as_a_new_sticker(text):
+    got = parse(text)
+    assert got.action is Action.RESTORE
+    assert got.phrase == "я так чувствую"

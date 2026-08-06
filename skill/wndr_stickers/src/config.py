@@ -55,19 +55,15 @@ class Settings(BaseSettings):
     duplicate_check: bool = True
     duplicate_threshold: float = 0.82
 
-    # Апрув
-    require_approval: bool = True
-    moderator_ids: str = ""
-    #: После скольких одобренных стикеров автор добавляет в пак без очереди.
-    #: 0 — доверие не выдаётся никогда.
-    auto_trust_after: int = 3
-    #: Чат, куда падают заявки. 0 — рассылаем модераторам в личку.
-    moderation_chat_id: int = 0
+    # Самоуправление общего пака
+    rate_removals_per_user_day: int = 5
+    pack_action_cooldown_seconds: int = 30
 
     # Квоты
     rate_per_user_hour: int = 5
     rate_per_user_day: int = 20
     rate_global_day: int = 300
+    max_concurrent_generations: int = 2
 
     # Пути
     # Runtime живёт вне Katya AI/Vault/Hermes. Это отдельная data-plane зона.
@@ -107,9 +103,7 @@ class Settings(BaseSettings):
     @field_validator(
         "telegram_owner_id",
         "pack_owner_id",
-        "moderation_chat_id",
         "pack_capacity",
-        "auto_trust_after",
         mode="before",
     )
     @classmethod
@@ -121,14 +115,6 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return 0
         return value
-
-    @property
-    def moderators(self) -> set[int]:
-        """Список модераторов. Владелец бота всегда среди них."""
-        out = self._ids(self.moderator_ids)
-        if self.telegram_owner_id:
-            out.add(self.telegram_owner_id)
-        return out
 
     @property
     def sticker_pack_owner(self) -> int:

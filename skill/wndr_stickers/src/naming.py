@@ -52,3 +52,17 @@ def allocate(phrase: str, directory: Path, suffix: str = ".webp") -> tuple[str, 
     slug = slugify(phrase)
     version = next_version(slug, directory)
     return slug, version, versioned_name(slug, version, suffix)
+
+
+def reserve(phrase: str, directory: Path, suffix: str = ".webp") -> tuple[str, int, str]:
+    """Атомарно занять имя файла; безопасно для параллельных генераций."""
+    directory.mkdir(parents=True, exist_ok=True)
+    slug = slugify(phrase)
+    version = 1
+    while True:
+        filename = versioned_name(slug, version, suffix)
+        try:
+            (directory / filename).touch(exist_ok=False)
+            return slug, version, filename
+        except FileExistsError:
+            version += 1

@@ -31,7 +31,7 @@ async def main() -> int:
         print(f"{FAIL} TELEGRAM_OWNER_ID пуст")
         problems += 1
     print(f"{OK} владелец пака настроен: {bool(s.sticker_pack_owner)}")
-    print(f"{OK} модераторов настроено: {len(s.moderators)}")
+    print(f"{OK} управление паком: community self-governance")
 
     print("\nСтиль")
     for label, path in (("референс", s.reference_sheet_path), ("шрифт", s.font_path)):

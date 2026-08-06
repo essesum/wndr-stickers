@@ -1,6 +1,8 @@
 """Команды бота."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import FSInputFile, Message
@@ -28,7 +30,11 @@ WNDR Club — место, где мы вместе продвигаемся в �
 /style — палитра и формы пака
 /quota — сколько стикеров тебе ещё доступно
 /pack — ссылка на общий стикерпак
-/zip — архив со всеми версиями
+/zip — архив того, что сейчас в общем паке
+/history — кто добавлял, убирал и возвращал
+
+Пак регулирует само сообщество: любой участник может добавить, убрать и вернуть
+стикер. Удаление обратимо — файл и история остаются.
 """
 
 STYLE = """\
@@ -100,7 +106,12 @@ def build_router(settings: Settings) -> Router:
 
     @router.message(Command("zip"))
     async def _zip(m: Message) -> None:
-        archive, count = pack.rebuild_zip(settings.stickers_dir, settings.zip_path)
+        rows = await db.pack_stickers(settings.db_path)
+        archive, count = pack.rebuild_zip(
+            settings.stickers_dir,
+            settings.zip_path,
+            active_paths=(Path(row.path) for row in rows),
+        )
         if count == 0:
             await m.answer("Стикеров пока нет.")
             return
@@ -108,6 +119,21 @@ def build_router(settings: Settings) -> Router:
             FSInputFile(archive),
             caption=f"Все версии: {count} файлов.",
         )
+
+    @router.message(Command("history"))
+    async def _history(m: Message) -> None:
+        actions = await db.recent_community_actions(settings.db_path)
+        if not actions:
+            await m.answer("История общего пака пока пуста.")
+            return
+        verbs = {"added": "добавил", "removed": "убрал", "restored": "вернул"}
+        lines = []
+        for action in actions:
+            actor = f"@{action.username}" if action.username else "участник"
+            lines.append(
+                f"{actor} {verbs.get(action.action, action.action)} «{action.phrase}»"
+            )
+        await m.answer("Последние действия:\n" + "\n".join(lines))
 
     @router.message(Command("stats"), F.from_user.id == settings.telegram_owner_id)
     async def _stats(m: Message) -> None:

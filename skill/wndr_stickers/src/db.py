@@ -40,13 +40,16 @@ CREATE TABLE IF NOT EXISTS stickers (
     model       TEXT,
     shape       TEXT,
     in_pack     INTEGER NOT NULL DEFAULT 0,
+    ever_in_pack INTEGER NOT NULL DEFAULT 0,
+    pack_state  TEXT NOT NULL DEFAULT 'out', -- out | adding | in | removing | restoring
     emoji       TEXT,
     pack_name   TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(slug, version)
 );
 
--- Апрув: что попадает в ОБЩИЙ пак, решают модераторы, а не автор стикера.
+-- Историческая таблица старого approval-flow. Сохраняется только ради данных
+-- существующей SQLite; активный бот её не читает и не пишет.
 CREATE TABLE IF NOT EXISTS submissions (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     sticker_id    INTEGER NOT NULL REFERENCES stickers(id),
@@ -73,6 +76,21 @@ CREATE TABLE IF NOT EXISTS community_vectors (
 );
 CREATE INDEX IF NOT EXISTS idx_community_vectors_normalised
     ON community_vectors(normalised);
+
+-- Прозрачная история самоуправления сообщества. Ничего не удаляем из истории:
+-- Telegram-пак можно восстановить из файлов и этого журнала.
+CREATE TABLE IF NOT EXISTS community_actions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    sticker_id  INTEGER NOT NULL REFERENCES stickers(id),
+    user_id     INTEGER NOT NULL,
+    action      TEXT NOT NULL, -- added | removed | restored
+    detail      TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_community_actions_user_time
+    ON community_actions(user_id, action, created_at);
+CREATE INDEX IF NOT EXISTS idx_community_actions_sticker_time
+    ON community_actions(sticker_id, created_at);
 """
 
 #: Колонки, добавленные после первого релиза. Ставим по одной, молча пропуская
@@ -82,33 +100,35 @@ _MIGRATIONS = (
     "ALTER TABLE stickers ADD COLUMN pack_name TEXT",
     # Telegram адресует стикер в наборе по file_id — без него удалить нечем.
     "ALTER TABLE stickers ADD COLUMN file_id TEXT",
+    "ALTER TABLE stickers ADD COLUMN ever_in_pack INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE stickers ADD COLUMN pack_state TEXT NOT NULL DEFAULT 'out'",
 )
 
 
 @dataclass
 class StickerRow:
     id: int
+    user_id: int
     slug: str
     version: int
     phrase: str
     path: str
     in_pack: bool
+    pack_state: str = "out"
     file_id: str | None = None
     pack_name: str | None = None
 
 
-@dataclass
-class Submission:
+@dataclass(frozen=True)
+class CommunityAction:
     id: int
     sticker_id: int
-    submitted_by: int
-    status: str
-    decided_by: int | None
-    decided_at: str | None
-    reason: str | None
+    phrase: str
+    user_id: int
+    username: str | None
+    action: str
+    detail: str | None
     created_at: str
-    phrase: str = ""
-    path: str = ""
 
 
 async def init_db(path: Path) -> None:
@@ -119,6 +139,12 @@ async def init_db(path: Path) -> None:
             # Колонка уже есть — это норма, база просто новее.
             with contextlib.suppress(Exception):
                 await db.execute(statement)
+        # Старые строки знают только in_pack. Миграция не требует ручной
+        # правки живой SQLite и не трогает уже начатые операции.
+        await db.execute(
+            "UPDATE stickers SET pack_state='in' WHERE in_pack=1 AND pack_state='out'"
+        )
+        await db.execute("UPDATE stickers SET ever_in_pack=1 WHERE in_pack=1")
         await db.commit()
 
 
@@ -148,6 +174,17 @@ async def log_request(
         return int(cur.lastrowid or 0)
 
 
+async def update_request(
+    path: Path, request_id: int, status: str, detail: str | None = None
+) -> None:
+    async with aiosqlite.connect(path) as database:
+        await database.execute(
+            "UPDATE requests SET status=?, detail=? WHERE id=?",
+            (status, detail, request_id),
+        )
+        await database.commit()
+
+
 async def count_requests(path: Path, *, user_id: int | None, hours: int) -> int:
     """Сколько удачных генераций за последние N часов."""
     window = f"-{hours} hours"
@@ -164,6 +201,24 @@ async def count_requests(path: Path, *, user_id: int | None, hours: int) -> int:
                 "AND created_at >= datetime('now', ?)",
                 (user_id, window),
             )
+        row = await cur.fetchone()
+    return int(row[0]) if row else 0
+
+
+async def count_quota_requests(path: Path, *, user_id: int | None, hours: int) -> int:
+    """Успешные + свежие reservations; зависшие pending протухают через 15 минут."""
+    window = f"-{hours} hours"
+    sql = (
+        "SELECT COUNT(*) FROM requests WHERE "
+        "((status='ok' AND created_at >= datetime('now', ?)) "
+        "OR (status='pending' AND created_at >= datetime('now', '-15 minutes')))"
+    )
+    params: tuple = (window,)
+    if user_id is not None:
+        sql += " AND user_id=?"
+        params = (window, user_id)
+    async with aiosqlite.connect(path) as database:
+        cur = await database.execute(sql, params)
         row = await cur.fetchone()
     return int(row[0]) if row else 0
 
@@ -191,11 +246,15 @@ async def save_sticker(path: Path, *, request_id: int, user_id: int, result) -> 
         return int(cur.lastrowid or 0)
 
 
-_STICKER_COLUMNS = "id, slug, version, phrase, path, in_pack, file_id, pack_name"
+_STICKER_COLUMNS = (
+    "id, user_id, slug, version, phrase, path, in_pack, pack_state, file_id, pack_name"
+)
 
 
 def _sticker(row) -> StickerRow:
-    return StickerRow(row[0], row[1], row[2], row[3], row[4], bool(row[5]), row[6], row[7])
+    return StickerRow(
+        row[0], row[1], row[2], row[3], row[4], row[5], bool(row[6]), row[7], row[8], row[9]
+    )
 
 
 async def mark_in_pack(
@@ -207,7 +266,9 @@ async def mark_in_pack(
 ) -> None:
     async with aiosqlite.connect(path) as db:
         await db.execute(
-            "UPDATE stickers SET in_pack=1, emoji=?, pack_name=?, file_id=? WHERE id=?",
+            "UPDATE stickers SET in_pack=1, ever_in_pack=1, pack_state='in', "
+            "emoji=?, pack_name=?, file_id=? "
+            "WHERE id=?",
             (emoji, pack, file_id, sticker_id),
         )
         await db.commit()
@@ -217,7 +278,8 @@ async def mark_removed_from_pack(path: Path, sticker_id: int) -> None:
     """Стикер убран из набора. Файл на диске остаётся — можно вернуть обратно."""
     async with aiosqlite.connect(path) as db:
         await db.execute(
-            "UPDATE stickers SET in_pack=0, file_id=NULL WHERE id=?", (sticker_id,)
+            "UPDATE stickers SET in_pack=0, pack_state='out', file_id=NULL WHERE id=?",
+            (sticker_id,),
         )
         await db.commit()
 
@@ -239,9 +301,111 @@ async def find_in_pack(path: Path, phrase: str) -> StickerRow | None:
         )
         rows = await cur.fetchall()
     for row in rows:
-        if " ".join((row[3] or "").split()).casefold() == needle:
+        if " ".join((row[4] or "").split()).casefold() == needle:
             return _sticker(row)
     return None
+
+
+async def find_removed(path: Path, phrase: str) -> StickerRow | None:
+    """Последняя удалённая версия фразы, которую можно вернуть в общий пак."""
+    needle = " ".join(phrase.split()).casefold()
+    if not needle:
+        return None
+    async with aiosqlite.connect(path) as database:
+        cur = await database.execute(
+            f"SELECT {_STICKER_COLUMNS} FROM stickers WHERE in_pack=0 AND ever_in_pack=1 "
+            "AND pack_state='out' "
+            "ORDER BY created_at DESC, id DESC"
+        )
+        rows = await cur.fetchall()
+    for row in rows:
+        if " ".join((row[4] or "").split()).casefold() == needle:
+            return _sticker(row)
+    return None
+
+
+async def claim_pack_operation(path: Path, sticker_id: int, operation: str) -> bool:
+    """Атомарно захватить внешнюю Telegram-операцию над одним стикером."""
+    transitions = {
+        "adding": (0, "out"),
+        "restoring": (0, "out"),
+        "removing": (1, "in"),
+    }
+    if operation not in transitions:
+        raise ValueError(f"unknown pack operation: {operation}")
+    expected_in_pack, expected_state = transitions[operation]
+    async with aiosqlite.connect(path) as database:
+        cur = await database.execute(
+            "UPDATE stickers SET pack_state=? WHERE id=? AND in_pack=? AND pack_state=?",
+            (operation, sticker_id, expected_in_pack, expected_state),
+        )
+        await database.commit()
+        return cur.rowcount > 0
+
+
+async def release_pack_operation(path: Path, sticker_id: int, operation: str) -> None:
+    """Откатить claim после ошибки Telegram, не меняя фактическое членство."""
+    async with aiosqlite.connect(path) as database:
+        await database.execute(
+            "UPDATE stickers SET pack_state=CASE WHEN in_pack=1 THEN 'in' ELSE 'out' END "
+            "WHERE id=? AND pack_state=?",
+            (sticker_id, operation),
+        )
+        await database.commit()
+
+
+async def log_community_action(
+    path: Path,
+    sticker_id: int,
+    user_id: int,
+    action: str,
+    detail: str | None = None,
+) -> int:
+    async with aiosqlite.connect(path) as database:
+        cur = await database.execute(
+            "INSERT INTO community_actions(sticker_id, user_id, action, detail) VALUES(?,?,?,?)",
+            (sticker_id, user_id, action, detail),
+        )
+        await database.commit()
+        return int(cur.lastrowid or 0)
+
+
+async def count_community_actions(
+    path: Path, *, user_id: int, action: str, hours: int
+) -> int:
+    window = f"-{hours} hours"
+    async with aiosqlite.connect(path) as database:
+        cur = await database.execute(
+            "SELECT COUNT(*) FROM community_actions WHERE user_id=? AND action=? "
+            "AND created_at >= datetime('now', ?)",
+            (user_id, action, window),
+        )
+        row = await cur.fetchone()
+    return int(row[0]) if row else 0
+
+
+async def seconds_since_last_community_action(path: Path, sticker_id: int) -> int | None:
+    async with aiosqlite.connect(path) as database:
+        cur = await database.execute(
+            "SELECT CAST((julianday('now') - julianday(created_at)) * 86400 AS INTEGER) "
+            "FROM community_actions WHERE sticker_id=? ORDER BY id DESC LIMIT 1",
+            (sticker_id,),
+        )
+        row = await cur.fetchone()
+    return int(row[0]) if row and row[0] is not None else None
+
+
+async def recent_community_actions(path: Path, limit: int = 15) -> list[CommunityAction]:
+    async with aiosqlite.connect(path) as database:
+        cur = await database.execute(
+            "SELECT a.id, a.sticker_id, s.phrase, a.user_id, u.username, a.action, "
+            "a.detail, a.created_at FROM community_actions a "
+            "JOIN stickers s ON s.id=a.sticker_id "
+            "LEFT JOIN users u ON u.user_id=a.user_id ORDER BY a.id DESC LIMIT ?",
+            (limit,),
+        )
+        rows = await cur.fetchall()
+    return [CommunityAction(*row) for row in rows]
 
 
 async def get_sticker(path: Path, sticker_id: int) -> StickerRow | None:
@@ -260,107 +424,6 @@ async def pack_stickers(path: Path) -> list[StickerRow]:
         )
         rows = await cur.fetchall()
     return [_sticker(r) for r in rows]
-
-
-# --- апрув -------------------------------------------------------------------
-
-_SUBMISSION_COLUMNS = (
-    "s.id, s.sticker_id, s.submitted_by, s.status, s.decided_by, s.decided_at, "
-    "s.reason, s.created_at, k.phrase, k.path"
-)
-
-
-def _submission(row) -> Submission:
-    return Submission(*row)
-
-
-async def create_submission(path: Path, sticker_id: int, submitted_by: int) -> int:
-    """Заявка на попадание в общий пак. Повторная на тот же стикер вернёт первую."""
-    async with aiosqlite.connect(path) as db:
-        await db.execute(
-            "INSERT OR IGNORE INTO submissions(sticker_id, submitted_by) VALUES(?, ?)",
-            (sticker_id, submitted_by),
-        )
-        await db.commit()
-        cur = await db.execute(
-            "SELECT id FROM submissions WHERE sticker_id=?", (sticker_id,)
-        )
-        row = await cur.fetchone()
-    return int(row[0]) if row else 0
-
-
-async def get_submission(path: Path, submission_id: int) -> Submission | None:
-    async with aiosqlite.connect(path) as db:
-        cur = await db.execute(
-            f"SELECT {_SUBMISSION_COLUMNS} FROM submissions s "
-            "JOIN stickers k ON k.id = s.sticker_id WHERE s.id=?",
-            (submission_id,),
-        )
-        row = await cur.fetchone()
-    return _submission(row) if row else None
-
-
-async def decide_submission(
-    path: Path,
-    submission_id: int,
-    *,
-    approved: bool,
-    decided_by: int,
-    reason: str | None = None,
-) -> bool:
-    """Решение принимается один раз. Если кто-то уже решил — вернём False.
-
-    Условие status='pending' прямо в UPDATE закрывает гонку двух модераторов,
-    нажавших кнопку одновременно.
-    """
-    status = "approved" if approved else "rejected"
-    async with aiosqlite.connect(path) as db:
-        cur = await db.execute(
-            "UPDATE submissions SET status=?, decided_by=?, reason=?, "
-            "decided_at=datetime('now') WHERE id=? AND status='pending'",
-            (status, decided_by, reason, submission_id),
-        )
-        await db.commit()
-        return cur.rowcount > 0
-
-
-async def pending_submissions(path: Path, limit: int = 20) -> list[Submission]:
-    async with aiosqlite.connect(path) as db:
-        cur = await db.execute(
-            f"SELECT {_SUBMISSION_COLUMNS} FROM submissions s "
-            "JOIN stickers k ON k.id = s.sticker_id "
-            "WHERE s.status='pending' ORDER BY s.created_at LIMIT ?",
-            (limit,),
-        )
-        rows = await cur.fetchall()
-    return [_submission(r) for r in rows]
-
-
-async def approved_count(path: Path, user_id: int) -> int:
-    async with aiosqlite.connect(path) as db:
-        cur = await db.execute(
-            "SELECT COUNT(*) FROM submissions WHERE submitted_by=? AND status='approved'",
-            (user_id,),
-        )
-        row = await cur.fetchone()
-    return int(row[0]) if row else 0
-
-
-async def is_trusted(path: Path, user_id: int) -> bool:
-    async with aiosqlite.connect(path) as db:
-        cur = await db.execute("SELECT trusted FROM users WHERE user_id=?", (user_id,))
-        row = await cur.fetchone()
-    return bool(row and row[0])
-
-
-async def set_trusted(path: Path, user_id: int, trusted: bool) -> None:
-    async with aiosqlite.connect(path) as db:
-        await db.execute(
-            "INSERT INTO users(user_id, trusted) VALUES(?, ?) "
-            "ON CONFLICT(user_id) DO UPDATE SET trusted=excluded.trusted",
-            (user_id, int(trusted)),
-        )
-        await db.commit()
 
 
 async def count_in_pack(path: Path, pack: str) -> int:

@@ -78,7 +78,7 @@ def make_sticker(
     generated = imagegen.generate(prompt, settings.reference_sheet_path, settings)
 
     plain, _ = typeset.parse_accents(phrase)
-    slug, version, filename = naming.allocate(plain, settings.stickers_dir)
+    slug, version, filename = naming.reserve(plain, settings.stickers_dir)
 
     raw_path = generated.save(settings.raw_dir / f"{slug}-v{version}.png")
 
@@ -132,7 +132,7 @@ def make_illustration(
     )
     generated = imagegen.generate(prompt, settings.reference_sheet_path, settings)
 
-    slug, version, filename = naming.allocate(name or motif, settings.stickers_dir)
+    slug, version, filename = naming.reserve(name or motif, settings.stickers_dir)
     raw_path = generated.save(settings.raw_dir / f"{slug}-v{version}.png")
 
     sticker = cutout.cut_out(raw_path)
@@ -165,7 +165,7 @@ def rebuild_from_raw(raw_path: Path, phrase: str, settings: Settings) -> Sticker
         sticker, phrase, area, str(settings.font_path), background
     )
     plain, _ = typeset.parse_accents(phrase)
-    slug, version, filename = naming.allocate(plain, settings.stickers_dir)
+    slug, version, filename = naming.reserve(plain, settings.stickers_dir)
     destination = cutout.save_webp(
         cutout.telegram_canvas(lettered), settings.stickers_dir / filename
     )

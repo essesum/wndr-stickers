@@ -117,8 +117,9 @@ async def find_similar(db_path: Path, phrase: str, *, limit: int = 3) -> list[Si
     try:
         async with aiosqlite.connect(db_path) as database:
             cursor = await database.execute(
-                "SELECT sticker_id, phrase, normalised, slug, version, vector_json "
-                "FROM community_vectors"
+                "SELECT v.sticker_id, v.phrase, v.normalised, v.slug, v.version, "
+                "v.vector_json FROM community_vectors v "
+                "JOIN stickers s ON s.id=v.sticker_id WHERE s.in_pack=1"
             )
             rows = await cursor.fetchall()
     except Exception:

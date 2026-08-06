@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import zipfile
+from collections.abc import Iterable
 from pathlib import Path
 
 from aiogram import Bot
@@ -161,9 +162,18 @@ async def add_with_overflow(
     raise RuntimeError(f"все {max_packs} наборов заполнены")
 
 
-def rebuild_zip(stickers_dir: Path, zip_path: Path) -> tuple[Path, int]:
-    """Пересобираем архив из всех версий. Ничего не удаляем — только добавляем."""
-    files = sorted(p for p in stickers_dir.glob("*.webp") if p.is_file())
+def rebuild_zip(
+    stickers_dir: Path,
+    zip_path: Path,
+    *,
+    active_paths: Iterable[Path] | None = None,
+) -> tuple[Path, int]:
+    """Пересобрать публичный ZIP; при active_paths включить только общий пак."""
+    files = (
+        sorted(p for p in stickers_dir.glob("*.webp") if p.is_file())
+        if active_paths is None
+        else sorted({Path(p) for p in active_paths if Path(p).is_file()})
+    )
     zip_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
         for path in files:
