@@ -16,10 +16,7 @@
 		<string>1</string>
 	</dict>
 	<key>KeepAlive</key>
-	<dict>
-		<key>SuccessfulExit</key>
-		<false/>
-	</dict>
+	<true/>
 	<key>Label</key>
 	<string>com.katya.wndr-stickers</string>
 	<key>ProgramArguments</key>
