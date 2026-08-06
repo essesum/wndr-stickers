@@ -117,7 +117,7 @@ def build_router(settings: Settings) -> Router:
             return
         await m.answer_document(
             FSInputFile(archive),
-            caption=f"Все версии: {count} файлов.",
+            caption=f"Активный общий пак: {count} файлов.",
         )
 
     @router.message(Command("history"))
