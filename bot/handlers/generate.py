@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 from pathlib import Path
 
 from aiogram import Bot, F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     CallbackQuery,
     FSInputFile,
@@ -62,18 +63,78 @@ async def _cooldown_left(settings: Settings, sticker_id: int, user_id: int) -> i
     return max(0, settings.pack_action_cooldown_seconds - elapsed)
 
 
+def _delete_hint_chunks(rows: list[db.StickerRow], *, max_chars: int = 3500) -> list[str]:
+    if not rows:
+        return ["В паке пока пусто."]
+    header = "Что удалить? Скопируй строку целиком и отправь боту:\n"
+    chunks: list[str] = [header]
+    for row in rows:
+        line = f"<code>удали #{row.id}</code> — {html.escape(row.phrase)}\n"
+        if len(chunks[-1]) + len(line) > max_chars and chunks[-1] != header:
+            chunks.append(header)
+        chunks[-1] += line
+    return [chunk.rstrip() for chunk in chunks]
+
+
+def _delete_hint(rows: list[db.StickerRow]) -> str:
+    return _delete_hint_chunks(rows)[0]
+
+
+def _pack_list_chunks(rows: list[db.StickerRow], *, max_chars: int = 3500) -> list[str]:
+    if not rows:
+        return ["В паке пока пусто."]
+    header = "В паке:\n"
+    chunks: list[str] = [header]
+    for row in rows:
+        line = f"• #{row.id} — {html.escape(row.phrase)}\n"
+        if len(chunks[-1]) + len(line) > max_chars and chunks[-1] != header:
+            chunks.append(header)
+        chunks[-1] += line
+    return [chunk.rstrip() for chunk in chunks]
+
+
+def _removed_message(phrase: str) -> str:
+    return (
+        f"Убрал «{html.escape(phrase)}». Файл сохранён: любой участник может вернуть его "
+        "командой «верни в пак»."
+    )
+
+
+async def _reply_delete_hint(m: Message, rows: list[db.StickerRow]) -> None:
+    for chunk in _delete_hint_chunks(rows):
+        await m.reply(chunk)
+
+
+async def _reply_pack_list(m: Message, rows: list[db.StickerRow]) -> None:
+    for chunk in _pack_list_chunks(rows):
+        await m.reply(chunk)
+
+
+async def _find_in_pack_by_phrase_or_id(settings: Settings, phrase: str) -> db.StickerRow | None:
+    key = phrase.strip()
+    if key.startswith("#") and key[1:].isdigit():
+        row = await db.get_sticker(settings.db_path, int(key[1:]))
+        if row and row.in_pack:
+            return row
+        return None
+    return await db.find_in_pack(settings.db_path, phrase)
+
+
 async def _remove(m: Message, settings: Settings, phrase: str) -> None:
     """Убрать стикер из общего пака; действие открыто и обратимо."""
     user = m.from_user
     assert user is not None and m.bot is not None
 
     if not phrase:
-        await m.reply('Что убрать? Например: <code>убери из пака "я так чувствую"</code>')
+        rows = await db.pack_stickers(settings.db_path)
+        await _reply_delete_hint(m, rows)
         return
 
-    row = await db.find_in_pack(settings.db_path, phrase)
+    row = await _find_in_pack_by_phrase_or_id(settings, phrase)
     if row is None:
-        await m.reply(f"В паке нет «{phrase}». Посмотреть, что есть: напиши «что в паке».")
+        rows = await db.pack_stickers(settings.db_path)
+        await m.reply(f"В паке нет «{html.escape(phrase)}».")
+        await _reply_delete_hint(m, rows)
         return
 
     if not settings.user_allowed(user.id) or not await db.touch_user(
@@ -120,10 +181,7 @@ async def _remove(m: Message, settings: Settings, phrase: str) -> None:
         await db.mark_removed_from_pack(settings.db_path, row.id)
         await db.log_community_action(settings.db_path, row.id, user.id, "removed")
         await _rebuild_public_zip(settings)
-    await m.reply(
-        f"Убрал «{row.phrase}». Файл сохранён: любой участник может вернуть его "
-        "командой «верни в пак»."
-    )
+    await m.reply(_removed_message(row.phrase))
 
 
 async def _add_row_to_pack(
@@ -304,12 +362,16 @@ def build_router(settings: Settings) -> Router:
     generation_slots = asyncio.Semaphore(max(1, settings.max_concurrent_generations))
 
     @router.message(Command("sticker"))
-    async def _explicit(m: Message, command: Command) -> None:
+    async def _explicit(m: Message, command: CommandObject) -> None:
         phrase = (command.args or "").strip()
         if not phrase:
             await m.answer("Напиши так: <code>/sticker Со мной все нормально</code>")
             return
         await _produce(m, settings, phrase, semaphore=generation_slots)
+
+    @router.message(Command("delete", "remove"))
+    async def _delete_command(m: Message, command: CommandObject) -> None:
+        await _remove(m, settings, (command.args or "").strip())
 
     @router.message(F.text & ~F.text.startswith("/"))
     async def _plain_text(m: Message) -> None:
@@ -337,11 +399,7 @@ def build_router(settings: Settings) -> Router:
 
         if got.action is intent.Action.LIST:
             rows = await db.pack_stickers(settings.db_path)
-            await m.reply(
-                "В паке пока пусто."
-                if not rows
-                else "В паке:\n" + "\n".join(f"• {r.phrase}" for r in rows)
-            )
+            await _reply_pack_list(m, rows)
             return
 
         if got.action is intent.Action.DELETE:

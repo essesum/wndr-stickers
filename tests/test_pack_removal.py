@@ -1,6 +1,7 @@
 """Удаление из пака. Найдено на живом боте: убрать стикер было нечем."""
 import pytest
 
+from bot.handlers import generate
 from skill.wndr_stickers.src import db
 from skill.wndr_stickers.src.config import Settings
 
@@ -91,3 +92,87 @@ async def test_latest_match_wins_when_phrase_repeats(settings):
     await db.mark_removed_from_pack(settings.db_path, old)
     await db.mark_in_pack(settings.db_path, new, "🔥", "wndr_by_bot", file_id="FID2")
     assert (await db.find_in_pack(settings.db_path, "я так чувствую")).id == new
+
+
+async def test_delete_lookup_accepts_copyable_sticker_id(settings):
+    await db.init_db(settings.db_path)
+    sid = await _add(settings, phrase="люди очень ценны", slug="lyudi")
+    await db.mark_in_pack(settings.db_path, sid, "🔥", "wndr_by_bot", file_id="FID1")
+
+    found = await generate._find_in_pack_by_phrase_or_id(settings, f"#{sid}")
+
+    assert found is not None and found.id == sid
+
+
+async def test_delete_lookup_treats_bare_digits_as_phrase(settings):
+    await db.init_db(settings.db_path)
+    numeric_phrase = await _add(settings, phrase="42", slug="numeric")
+    other = await _add(settings, phrase="другой", slug="other")
+    await db.mark_in_pack(settings.db_path, numeric_phrase, "🔥", "wndr_by_bot", file_id="FID1")
+    await db.mark_in_pack(settings.db_path, other, "🔥", "wndr_by_bot", file_id="FID2")
+
+    found = await generate._find_in_pack_by_phrase_or_id(settings, "42")
+
+    assert found is not None and found.id == numeric_phrase
+
+
+def test_delete_hint_lists_copyable_delete_commands():
+    rows = [
+        db.StickerRow(17, 111, "lyudi", 1, "люди <очень> ценны", "/tmp/a.webp", True),
+        db.StickerRow(18, 111, "wndr", 1, "WNDR club", "/tmp/b.webp", True),
+    ]
+
+    text = generate._delete_hint(rows)
+
+    assert "<code>удали #17</code> — люди &lt;очень&gt; ценны" in text
+    assert "<code>удали #18</code> — WNDR club" in text
+
+
+def test_delete_hint_chunks_large_pack():
+    rows = [
+        db.StickerRow(
+            i,
+            111,
+            f"slug-{i}",
+            1,
+            "очень длинная фраза " * 8,
+            f"/tmp/{i}.webp",
+            True,
+        )
+        for i in range(1, 121)
+    ]
+
+    chunks = generate._delete_hint_chunks(rows, max_chars=500)
+
+    assert len(chunks) > 1
+    assert all(len(chunk) <= 500 for chunk in chunks)
+    assert "<code>удали #1</code>" in chunks[0]
+    assert "<code>удали #120</code>" in chunks[-1]
+
+
+def test_pack_list_chunks_large_pack_and_escapes_html():
+    rows = [
+        db.StickerRow(
+            i,
+            111,
+            f"slug-{i}",
+            1,
+            "фраза <с html> " * 8,
+            f"/tmp/{i}.webp",
+            True,
+        )
+        for i in range(1, 121)
+    ]
+
+    chunks = generate._pack_list_chunks(rows, max_chars=500)
+
+    assert len(chunks) > 1
+    assert all(len(chunk) <= 500 for chunk in chunks)
+    assert "&lt;с html&gt;" in chunks[0]
+    assert "#120" in chunks[-1]
+
+
+def test_removed_message_escapes_html_phrase():
+    text = generate._removed_message("люди <очень> ценны")
+
+    assert "люди &lt;очень&gt; ценны" in text
