@@ -53,6 +53,24 @@ STYLE = """\
 """
 
 
+def _pack_summary(rows, *, fallback_pack_name: str) -> str:
+    """Собрать честный ответ /pack: один или несколько Telegram-наборов."""
+    counts: dict[str, int] = {}
+    for row in rows:
+        name = row.pack_name or fallback_pack_name
+        counts[name] = counts.get(name, 0) + 1
+
+    total = sum(counts.values())
+    if len(counts) == 1:
+        name, count = next(iter(counts.items()))
+        return f"Стикеров в паке: <b>{count}</b>\nhttps://t.me/addstickers/{name}"
+
+    lines = [f"Стикеров в общем паке: <b>{total}</b>", ""]
+    for index, (name, count) in enumerate(counts.items(), start=1):
+        lines.append(f"{index}. <b>{count}</b> — https://t.me/addstickers/{name}")
+    return "\n".join(lines)
+
+
 def build_router(settings: Settings) -> Router:
     router = Router(name="commands")
 
@@ -99,10 +117,7 @@ def build_router(settings: Settings) -> Router:
                 "В паке пока пусто. Сделай стикер и нажми «В пак» под ним."
             )
             return
-        await m.answer(
-            f"Стикеров в паке: <b>{len(rows)}</b>\n"
-            f"https://t.me/addstickers/{name}"
-        )
+        await m.answer(_pack_summary(rows, fallback_pack_name=name))
 
     @router.message(Command("zip"))
     async def _zip(m: Message) -> None:

@@ -6,13 +6,44 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import os
 import shutil
 import sys
+from urllib.parse import urlparse
 
 from skill.wndr_stickers.src import community_memory
 from skill.wndr_stickers.src.config import get_settings
 
 OK, FAIL, WARN = "  ✓", "  ✗", "  !"
+
+
+_LOCAL_PROXY_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_BLOCKED_LOCAL_PROXY_PORTS = {10808, 10809, 10810, 10811}
+
+
+def is_blocked_local_proxy(proxy: str) -> bool:
+    """True для local proxy endpoint, запрещённого runtime Seatbelt-профилем."""
+    if not proxy.strip():
+        return False
+    parsed = urlparse(proxy if "://" in proxy else f"http://{proxy}")
+    host = (parsed.hostname or "").rstrip(".").lower()
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    if port not in _BLOCKED_LOCAL_PROXY_PORTS:
+        return False
+    if host in _LOCAL_PROXY_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def runtime_sandbox_enabled() -> bool:
+    return os.environ.get("WNDR_RUNTIME_SANDBOX") == "1"
 
 
 async def main() -> int:
@@ -43,6 +74,23 @@ async def main() -> int:
 
     print("\nГенерация картинок")
     print(f"{OK} цепочка: {' -> '.join(s.provider_chain)}")
+    if s.https_proxy:
+        if is_blocked_local_proxy(s.https_proxy):
+            if runtime_sandbox_enabled():
+                print(
+                    f"{FAIL} HTTPS_PROXY указывает на loopback; "
+                    "runtime sandbox блокирует fallback-провайдеры через него"
+                )
+                problems += 1
+            else:
+                print(
+                    f"{WARN} HTTPS_PROXY указывает на loopback; "
+                    "под LaunchAgent/Seatbelt fallback-провайдеры будут недоступны"
+                )
+        else:
+            print(f"{OK} HTTPS_PROXY не loopback")
+    else:
+        print(f"{OK} HTTPS_PROXY пуст; sandbox не режет прямой outbound по loopback")
     if "codex" in s.provider_chain:
         if shutil.which("codex"):
             print(f"{OK} codex в PATH, модель {s.codex_model}")
