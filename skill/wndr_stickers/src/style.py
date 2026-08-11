@@ -35,20 +35,67 @@ class Shape:
     is_arrow: bool = False
 
 
+#: Формы взяты с живого пака WndrMorelife: там плашка — это не прямоугольник с
+#: текстом, а оформленный знак с рамкой, кантами и орнаментом. Простые примитивы
+#: («скруглённый прямоугольник») давали пустые пресные стикеры, потому что модель
+#: честно рисовала ровно то, что просили.
 SHAPES: tuple[Shape, ...] = (
-    Shape("rounded-rect", "a rounded rectangle plate", "нейтральный, много текста"),
     Shape(
-        "wavy-blob",
-        "a wavy speech blob / organic blob plate",
-        "мягкий, разговорный",
+        "rounded-rect",
+        "a rounded rectangle plate with a doubled contrasting keyline and small "
+        "ornamental corner marks",
+        "нейтральный, много текста",
     ),
-    Shape("starburst", "a starburst explosion plate with rays", "громкий, восклицание"),
-    Shape("lightning", "a lightning-bolt banner / cut parallelogram", "дерзкий, панч"),
     Shape(
-        "oval", "a decorative oval with a small botanical ornament", "торжественный, ироничный"
+        "rosette",
+        "a scalloped rosette badge with a wavy petal-shaped outer edge and a thin "
+        "concentric inner keyline following the scallops",
+        "торжественный, знак качества",
     ),
-    Shape("arrow", "an arrow / pointer badge", "вводит продолжение", is_arrow=True),
-    Shape("stamp", "a rectangle with a toothed postage-stamp edge", "документальный, билет"),
+    Shape(
+        "wreath",
+        "an ornate badge framed by an engraved botanical wreath of roses and leaves "
+        "growing along the left and right edges and meeting at top and bottom",
+        "цветущий, праздничный",
+    ),
+    Shape(
+        "celestial-burst",
+        "a starburst badge with long pointed rays around the whole contour, with a "
+        "small engraved crescent moon, sun face and scattered stars worked into the "
+        "rays and the frame",
+        "громкий, космический",
+    ),
+    Shape(
+        "ticket",
+        "a horizontal ticket / coupon plate with semicircular notches punched into "
+        "the left and right sides and a dashed perforation line near one end",
+        "документальный, билет",
+    ),
+    Shape(
+        "banner-swash",
+        "a rounded banner plate with a small pointed tail at the bottom and a thin "
+        "decorative swash flourish curving under the text area",
+        "разговорный, тёплый",
+    ),
+    Shape(
+        "ray-oval",
+        "a horizontal oval plate with short straight dashes radiating outward from "
+        "the left and right sides like an emphasis mark",
+        "восклицание, акцент",
+    ),
+    Shape(
+        "lightning",
+        "a bold cut-parallelogram banner with a lightning-bolt notch on one edge and "
+        "a doubled contrasting keyline",
+        "дерзкий, панч",
+    ),
+    Shape(
+        "arrow",
+        "an arrow / pointer badge with a doubled keyline and small star accents at "
+        "the tail",
+        "вводит продолжение",
+        is_arrow=True,
+    ),
 )
 
 
@@ -78,11 +125,15 @@ def pick_combo(rng: random.Random | None = None) -> dict:
 
 
 # --- Bans --------------------------------------------------------------------
+#: «No tiny cluttered detail» отсюда убрано намеренно: модель понимала это как
+#: запрет на орнамент вообще и выдавала пустые плашки. Богатая рамка — это и
+#: есть стиль пака, ограничивать надо середину, а не контур.
 NEGATIVE = (
     "NO text, NO letters, NO typography, NO numbers, NO captions, "
     "NO watermark, NO signature. "
     "No gradients, no 3D, no gloss, no drop shadows, no photorealism/photo. "
-    "No more than three colours. No non-black background. No tiny cluttered detail."
+    "No more than three colours in the design itself, not counting the "
+    "cream die-cut outline. No non-black background outside the sticker."
 )
 
 
@@ -93,12 +144,14 @@ sticker plate, centred, on a plain solid pure-black background.
 
 Shape: {shape_prompt}.
 Plate fill: {fill}. A warm cream-white outer die-cut outline (#F7F3EA) runs around \
-the whole contour and should read as 8-12 px at 512 px, optionally with a thin \
-inner keyline.
+the whole contour and should read as 8-12 px at 512 px, with a thin contrasting \
+inner keyline echoing the contour a few pixels inside it.
 Palette strictly and only: burnt orange #CC3D11, near-black #0D0D0D, cream \
-#F2E2C8, off-white #F7F3EA. Use exactly two base colours on this plate; any \
-third colour may appear only as tiny edge decoration, never as a full fill.
-Flat retro 1970s signage / silkscreen look.
+#F2E2C8, plus the off-white die-cut outline #F7F3EA. The three design colours \
+may all appear together in the frame and ornament; the flat central fill stays \
+a single colour.
+Flat retro 1970s signage / silkscreen look, in the spirit of an ornate vintage \
+label: the border and frame are richly decorated, the centre is calm.
 
 CRITICAL — the interior of the plate must be a FLAT EMPTY area of solid {fill}, \
 completely clean and uninterrupted across the middle {clean_band} of the plate. \
@@ -122,9 +175,15 @@ illustration with heavy black linework and flat fills. It must not enter the cle
 central area.\
 """
 
+#: Раньше здесь стояло «keep the plate bare … at most one tiny mark», и модель
+#: честно рисовала пустую плашку. Богатство живёт в рамке — просить его надо
+#: прямо, иначе его не будет.
 BARE_CLAUSE = """\
-Keep the plate bare apart from the outline and, at most, one tiny star, ray, \
-botanical mark, or short underline touching the very edge of the plate.\
+Decorate the FRAME generously in engraved vintage-label fashion: layered keylines \
+following the contour, and ornament worked into the border — small stars and \
+sparkles, short rays, botanical sprigs, or a repeating edge motif, whatever suits \
+the shape. The ornament belongs to the border and the corners; it must never \
+enter the clean central area.\
 """
 
 ILLUSTRATION_PROMPT = """\
