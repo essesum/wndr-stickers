@@ -28,6 +28,10 @@ from skill.wndr_stickers.src.config import get_settings  # noqa: E402
 PACK_URL = "https://t.me/addstickers/wndr_club_by_WNDR_stickers_bot"
 BOT_URL = "https://t.me/WNDR_stickers_bot"
 SEASON = "season 3"
+#: День, когда пак обнулили под новый сезон. Числа сезона считаются отсюда:
+#: иначе «сделано» тянет за собой досезонную историю и страница врёт — при
+#: одном стикере в паке показывала бы 44 «сделанных».
+SEASON_START = "2026-08-11"
 
 
 def esc(value) -> str:
@@ -93,10 +97,27 @@ def shape_rows(shapes: list[tuple[str, int]]) -> str:
     return f'<ul class="shapes">{"".join(rows)}</ul>'
 
 
-def render(d: dict, in_pack: int) -> str:
+def season_stats(conn: sqlite3.Connection, bot_id: int | None) -> dict:
+    """Числа именно этого сезона. Уникальных людей считает база, а не сумма
+    по дням: один человек, заходивший трижды, — это один человек."""
+    not_bot = "" if bot_id is None else f" AND user_id != {int(bot_id)}"
+    made = conn.execute(
+        f"SELECT COUNT(*) FROM requests WHERE status='ok' "
+        f"AND date(created_at) >= ?{not_bot}",
+        (SEASON_START,),
+    ).fetchone()[0]
+    people = conn.execute(
+        f"SELECT COUNT(DISTINCT user_id) FROM requests "
+        f"WHERE date(created_at) >= ?{not_bot}",
+        (SEASON_START,),
+    ).fetchone()[0]
+    return {"made": made, "people": people}
+
+
+def render(d: dict, in_pack: int, season: dict) -> str:
     days = d["days"]
-    made_30d = sum(d["per_day"].get(x, 0) for x in days)
-    active = d["mau"].get(days[-1], 0)
+    made_season = season["made"]
+    active = season["people"]
 
     table_rows = "".join(
         f"<tr><td>{esc(month(x))}</td><td>{d['per_day'].get(x, 0)}</td>"
@@ -110,7 +131,7 @@ def render(d: dict, in_pack: int) -> str:
         pack_url=PACK_URL,
         bot_url=BOT_URL,
         in_pack=in_pack,
-        made_30d=made_30d,
+        made_season=made_season,
         active=active,
         total_made=d["stickers_total"],
         day_bars=day_bars(days, d["per_day"]),
@@ -262,8 +283,8 @@ footer a {{ color:inherit; }}
 
 <div class="stats">
   <div class="card stat hi"><b>{in_pack}</b><span>в паке сейчас</span></div>
-  <div class="card stat"><b>{made_30d}</b><span>сделано за 30 дней</span></div>
-  <div class="card stat"><b>{active}</b><span>участников в деле</span></div>
+  <div class="card stat"><b>{made_season}</b><span>сделано в этом сезоне</span></div>
+  <div class="card stat"><b>{active}</b><span>участников в сезоне</span></div>
   <div class="card stat"><b>{total_made}</b><span>стикеров за всё время</span></div>
 </div>
 
@@ -315,10 +336,11 @@ def main() -> None:
 
     with sqlite3.connect(f"file:{settings.db_path}?mode=ro", uri=True) as conn:
         data = collect(conn, bot_id)
+        season = season_stats(conn, bot_id)
         in_pack = data["in_pack"]
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(render(data, in_pack), encoding="utf-8")
+    args.out.write_text(render(data, in_pack, season), encoding="utf-8")
     print(f"готово: {args.out}")
     if args.open:
         subprocess.run(["open", str(args.out)], check=False)
