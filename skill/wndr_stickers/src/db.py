@@ -311,6 +311,13 @@ async def mark_in_pack(
         await db.commit()
 
 
+async def clear_core(path: Path, sticker_id: int) -> None:
+    """Снять неприкосновенность. Нужно якорю: он защищён лишь пока пак пуст."""
+    async with connect(path) as db:
+        await db.execute("UPDATE stickers SET is_core=0 WHERE id=?", (sticker_id,))
+        await db.commit()
+
+
 async def mark_removed_from_pack(path: Path, sticker_id: int) -> None:
     """Стикер убран из набора. Файл на диске остаётся — можно вернуть обратно."""
     async with connect(path) as db:

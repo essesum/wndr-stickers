@@ -126,6 +126,58 @@ async def test_core_sticker_survives_a_community_delete(tmp_path, monkeypatch):
     assert not (await db.get_sticker(settings.db_path, sticker_id)).in_pack
 
 
+async def _add_sticker(settings, *, user_id: int, phrase: str, slug: str):
+    path = settings.stickers_dir / f"{slug}.webp"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"webp")
+    request_id = await db.log_request(settings.db_path, user_id, phrase, "ok")
+    return await db.save_sticker(
+        settings.db_path,
+        request_id=request_id,
+        user_id=user_id,
+        result=SimpleNamespace(
+            slug=slug, version=1, phrase=phrase, path=str(path), raw_path=str(path),
+            provider="t", model="t", shape="cloud", seconds=1.0,
+        ),
+    )
+
+
+async def test_anchor_retires_once_the_community_fills_the_pack(tmp_path):
+    """Якорь держит набор живым, пока он пуст, и уходит, когда есть замена."""
+    settings = Settings(
+        telegram_owner_id=111, state_dir=tmp_path, output_dir=tmp_path / "o"
+    )
+    await db.init_db(settings.db_path)
+    anchor_id = await _add_sticker(settings, user_id=111, phrase="KEEP WNDRING", slug="kw")
+    await db.mark_in_pack(settings.db_path, anchor_id, "🔥", "wndr", "file-anchor")
+    async with db.connect(settings.db_path) as conn:
+        await conn.execute("UPDATE stickers SET is_core=1 WHERE id=?", (anchor_id,))
+        await conn.commit()
+
+    deleted = AsyncMock()
+    bot = SimpleNamespace(delete_sticker_from_set=deleted)
+
+    # Пока якорь один в паке — снимать нельзя, иначе набор исчезнет.
+    await generate._retire_anchor(bot, settings)
+    deleted.assert_not_awaited()
+    assert (await db.get_sticker(settings.db_path, anchor_id)).in_pack
+
+    # Появился стикер участника — якорь больше не нужен.
+    theirs = await _add_sticker(settings, user_id=222, phrase="это величие", slug="ev")
+    await db.mark_in_pack(settings.db_path, theirs, "🔥", "wndr", "file-theirs")
+    await generate._retire_anchor(bot, settings)
+
+    deleted.assert_awaited_once_with(sticker="file-anchor")
+    gone = await db.get_sticker(settings.db_path, anchor_id)
+    assert not gone.in_pack and not gone.is_core
+    assert [r.id for r in await db.pack_stickers(settings.db_path)] == [theirs]
+
+    # Правило самоотключается: неприкосновенных в паке не осталось.
+    deleted.reset_mock()
+    await generate._retire_anchor(bot, settings)
+    deleted.assert_not_awaited()
+
+
 async def test_zero_limit_means_no_limit_but_still_counted(tmp_path):
     """Снятая квота не должна отключать подсчёт — цифры нужны для замера."""
     settings = Settings(

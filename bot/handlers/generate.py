@@ -217,6 +217,37 @@ async def _remove(m: Message, settings: Settings, phrase: str) -> None:
     await m.reply(_removed_message(row.phrase))
 
 
+async def _retire_anchor(bot: Bot, settings: Settings) -> None:
+    """Снять якорный стикер, как только сообществу есть чем его заменить.
+
+    Пак нельзя оставлять пустым: удаление последнего стикера уничтожает набор
+    в Telegram, а его имя потом не переиспользуется — ссылка, которую все
+    добавили, умерла бы. Поэтому при рестарте сезона один стикер оставлен
+    якорем и помечен как неприкосновенный.
+
+    Как только в паке появляется что-то ещё, держать якорь больше незачем:
+    сезон наполняют участники. Правило самоотключается — после ухода якоря
+    неприкосновенных в паке не остаётся и условие никогда не срабатывает снова.
+    """
+    rows = await db.pack_stickers(settings.db_path)
+    if len(rows) < 2:
+        return
+    anchors = [row for row in rows if row.is_core]
+    if len(anchors) != 1:
+        return
+    anchor = anchors[0]
+    if not anchor.file_id:
+        return
+    try:
+        await bot.delete_sticker_from_set(sticker=anchor.file_id)
+    except Exception:  # noqa: BLE001 — не смогли снять, попробуем в следующий раз
+        log.warning("якорный стикер не снялся, останется до следующего добавления")
+        return
+    await db.mark_removed_from_pack(settings.db_path, anchor.id)
+    await db.clear_core(settings.db_path, anchor.id)
+    log.info("якорь «%s» снят: сезон наполняют участники", anchor.phrase)
+
+
 async def _add_row_to_pack(
     bot: Bot,
     settings: Settings,
@@ -260,6 +291,7 @@ async def _add_row_to_pack(
             settings.db_path, row.id, settings.default_emoji, name, file_id
         )
         await db.log_community_action(settings.db_path, row.id, user.id, action, name)
+        await _retire_anchor(bot, settings)
         await _rebuild_public_zip(settings)
         verb = "Вернул" if restoring else "Добавил"
         return True, f"{verb} «{html.escape(fresh.phrase)}» в общий пак:\n{link}"
