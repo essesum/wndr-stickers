@@ -305,7 +305,8 @@ footer a {{ color:inherit; }}
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--open", action="store_true")
-    parser.add_argument("--out", type=Path, default=ROOT / "site" / "index.html")
+    # docs/ — то, что GitHub Pages отдаёт как корень сайта.
+    parser.add_argument("--out", type=Path, default=ROOT / "docs" / "index.html")
     args = parser.parse_args()
 
     settings = get_settings()

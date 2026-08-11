@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>WNDR community pack — season 3</title>
+<meta name="description" content="Стикерпак WNDR собирает само сообщество.
+  Пульс сезона: сколько сделано, когда клуб активен, из чего собран пак.">
+<meta name="robots" content="noindex">
+<meta property="og:title" content="WNDR community pack — season 3">
+<meta property="og:description"
+  content="Пак собирает само сообщество. Пришли фразу боту — получишь стикер.">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&display=swap" rel="stylesheet">
+<style>
+:root {
+  --paper:#F2E2C8; --card:#F7F3EA; --ink:#0D0D0D; --accent:#CC3D11;
+  --muted:#6B6257; --rule:#0D0D0D1F; --shadow:#0D0D0D;
+  --gap:16px; --radius:16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper:#12110E; --card:#1C1A16; --ink:#F2E2C8; --accent:#E8663A;
+    --muted:#9A9082; --rule:#F2E2C81F; --shadow:#000;
+  }
+}
+* { box-sizing:border-box; }
+html { -webkit-text-size-adjust:100%; }
+body {
+  margin:0; background:var(--paper); color:var(--ink);
+  padding:clamp(16px,4vw,40px) clamp(14px,4vw,32px) 64px;
+  font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  overflow-x:hidden;
+}
+.display { font-family:Anton,Haettenschweiler,"Arial Narrow",Impact,sans-serif;
+  font-weight:400; text-transform:uppercase; letter-spacing:.005em; }
+.wrap { max-width:1080px; margin:0 auto; }
+
+h1 { font-size:clamp(40px,11vw,86px); line-height:.9; margin:0 0 14px; }
+h1 em { font-style:normal; color:var(--accent); display:block; }
+.lede { font-size:clamp(16px,2.4vw,19px); max-width:52ch; margin:0 0 22px; color:var(--ink); }
+.muted { color:var(--muted); }
+
+.cta { display:flex; flex-wrap:wrap; gap:10px; margin:0 0 34px; }
+.btn {
+  display:inline-flex; align-items:center; justify-content:center;
+  min-height:48px; padding:0 22px; border-radius:999px; text-decoration:none;
+  border:2px solid var(--ink); font-weight:600; font-size:15px;
+  background:var(--card); color:var(--ink); box-shadow:3px 3px 0 var(--shadow);
+  transition:transform .15s ease, box-shadow .15s ease;
+}
+.btn.primary { background:var(--accent); color:#F7F3EA; border-color:var(--ink); }
+.btn:hover { transform:translate(-1px,-1px); box-shadow:4px 4px 0 var(--shadow); }
+.btn:active { transform:translate(2px,2px); box-shadow:1px 1px 0 var(--shadow); }
+.btn:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
+
+.stats { display:grid; gap:var(--gap); margin:0 0 var(--gap);
+  grid-template-columns:repeat(2,minmax(0,1fr)); }
+.card {
+  background:var(--card); border:2px solid var(--ink); border-radius:var(--radius);
+  padding:16px 18px; box-shadow:4px 4px 0 var(--shadow); min-width:0;
+}
+.stat b { display:block; font-size:clamp(34px,8vw,52px); line-height:1;
+  font-family:Anton,Impact,sans-serif; font-weight:400; }
+.stat.hi b { color:var(--accent); }
+.stat span { display:block; margin-top:6px; font-size:13px; color:var(--muted); }
+
+section.card { margin-bottom:var(--gap); }
+h2 { font-size:clamp(17px,3.4vw,21px); margin:0 0 4px; }
+.note { margin:0 0 16px; font-size:13px; color:var(--muted); }
+
+.days, .hours { display:flex; align-items:flex-end; gap:2px; height:120px; }
+.day, .hour { position:relative; flex:1; min-width:0; height:100%;
+  display:flex; flex-direction:column; justify-content:flex-end; align-items:center; }
+.day-bar, .hour-bar { width:100%; background:var(--accent);
+  border-radius:3px 3px 0 0; min-height:2px; }
+.hour-bar { background:var(--ink); }
+.day-tick, .hour-tick { font-size:9px; color:var(--muted); margin-top:5px; }
+.day-tip {
+  position:absolute; bottom:100%; left:50%; transform:translateX(-50%);
+  background:var(--ink); color:var(--paper); padding:5px 9px; border-radius:7px;
+  font-size:12px; white-space:nowrap; opacity:0; pointer-events:none;
+  transition:opacity .15s ease; z-index:5;
+}
+.day:hover .day-tip, .hour:hover .day-tip,
+.day:focus-within .day-tip, .hour:focus-within .day-tip { opacity:1; }
+
+.shapes { list-style:none; margin:0; padding:0; }
+.shapes li { display:grid; grid-template-columns:minmax(72px,32%) 1fr auto;
+  gap:10px; align-items:center; padding:5px 0; }
+.shape-name { font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.shape-track { background:var(--rule); border-radius:4px; height:14px; overflow:hidden; }
+.shape-fill { display:block; height:100%; background:var(--accent); border-radius:0 4px 4px 0; }
+.shape-n { font-size:14px; color:var(--muted); font-variant-numeric:tabular-nums; }
+
+details { margin-top:14px; }
+summary { cursor:pointer; font-size:14px; color:var(--muted); min-height:44px;
+  display:flex; align-items:center; }
+summary:focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
+table { width:100%; border-collapse:collapse; font-size:14px; margin-top:8px; }
+th, td { text-align:left; padding:7px 10px 7px 0; border-bottom:1px solid var(--rule);
+  font-variant-numeric:tabular-nums; }
+th { color:var(--muted); font-weight:600; }
+.empty { color:var(--muted); font-style:italic; }
+
+footer { margin-top:30px; font-size:13px; color:var(--muted); }
+footer a { color:inherit; }
+
+/* Планшет */
+@media (min-width:768px) {
+  .stats { grid-template-columns:repeat(4,minmax(0,1fr)); }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:var(--gap); }
+  .grid2 > section { margin-bottom:0; }
+  .grid2 { margin-bottom:var(--gap); }
+  .days, .hours { height:150px; }
+}
+/* Узкий телефон: 30 столбиков не читаются — показываем две недели */
+@media (max-width:520px) {
+  .day.early { display:none; }
+  .hour-tick { font-size:8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { transition:none !important; animation:none !important; }
+}
+</style></head>
+<body>
+<div class="wrap">
+<header>
+  <h1 class="display">WNDR community pack<em>season 3</em></h1>
+  <p class="lede">Пак собирает само сообщество. Пришли фразу боту — он вернёт
+  готовый стикер в стиле WNDR, и ты сам решаешь, класть его в общий пак или нет.
+  Сезон начался с чистого листа: в паке только то, что сделали участники.</p>
+  <div class="cta">
+    <a class="btn primary" href="https://t.me/WNDR_stickers_bot">Сделать стикер</a>
+    <a class="btn" href="https://t.me/addstickers/wndr_club_by_WNDR_stickers_bot">Добавить пак</a>
+  </div>
+</header>
+
+<div class="stats">
+  <div class="card stat hi"><b>1</b><span>в паке сейчас</span></div>
+  <div class="card stat"><b>44</b><span>сделано за 30 дней</span></div>
+  <div class="card stat"><b>3</b><span>участников в деле</span></div>
+  <div class="card stat"><b>44</b><span>стикеров за всё время</span></div>
+</div>
+
+<section class="card">
+  <h2 class="display">Пульс сезона</h2>
+  <p class="note">Сколько стикеров рождалось каждый день. Последние 30 дней;
+  на телефоне — две недели.</p>
+  <div class="days" role="img" aria-label="Стикеры по дням за 30 дней"><div class="day early"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">14</span><span class="day-tip">14.07: 0</span></div><div class="day early"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">15</span><span class="day-tip">15.07: 0</span></div><div class="day early"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">16</span><span class="day-tip">16.07: 0</span></div><div class="day early"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">17</span><span class="day-tip">17.07: 0</span></div><div class="day early"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">18</span><span class="day-tip">18.07: 0</span></div><div class="day early"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">19</span><span class="day-tip">19.07: 0</span></div><div class="day early"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">20</span><span class="day-tip">20.07: 0</span></div><div class="day early"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">21</span><span class="day-tip">21.07: 0</span></div><div class="day early"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">22</span><span class="day-tip">22.07: 0</span></div><div class="day early"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">23</span><span class="day-tip">23.07: 0</span></div><div class="day early"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">24</span><span class="day-tip">24.07: 0</span></div><div class="day early"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">25</span><span class="day-tip">25.07: 0</span></div><div class="day early"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">26</span><span class="day-tip">26.07: 0</span></div><div class="day early"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">27</span><span class="day-tip">27.07: 0</span></div><div class="day early"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">28</span><span class="day-tip">28.07: 0</span></div><div class="day early"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">29</span><span class="day-tip">29.07: 0</span></div><div class="day"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">30</span><span class="day-tip">30.07: 0</span></div><div class="day"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">31</span><span class="day-tip">31.07: 0</span></div><div class="day"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">01</span><span class="day-tip">01.08: 0</span></div><div class="day"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">02</span><span class="day-tip">02.08: 0</span></div><div class="day"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">03</span><span class="day-tip">03.08: 0</span></div><div class="day"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">04</span><span class="day-tip">04.08: 0</span></div><div class="day"><div class="day-bar" style="height:10.3%"></div><span class="day-tick">05</span><span class="day-tip">05.08: 4</span></div><div class="day"><div class="day-bar" style="height:100.0%"></div><span class="day-tick">06</span><span class="day-tip">06.08: 39</span></div><div class="day"><div class="day-bar" style="height:2.6%"></div><span class="day-tick">07</span><span class="day-tip">07.08: 1</span></div><div class="day"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">08</span><span class="day-tip">08.08: 0</span></div><div class="day"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">09</span><span class="day-tip">09.08: 0</span></div><div class="day"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">10</span><span class="day-tip">10.08: 0</span></div><div class="day"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">11</span><span class="day-tip">11.08: 0</span></div><div class="day"><div class="day-bar" style="height:0.0%"></div><span class="day-tick">12</span><span class="day-tip">12.08: 0</span></div></div>
+  <details>
+    <summary>Показать таблицей</summary>
+    <table><thead><tr><th>день</th><th>стикеров</th><th>участников</th></tr></thead>
+    <tbody><tr><td>05.08</td><td>4</td><td>1</td></tr><tr><td>06.08</td><td>39</td><td>2</td></tr><tr><td>07.08</td><td>1</td><td>1</td></tr></tbody></table>
+  </details>
+</section>
+
+<div class="grid2">
+  <section class="card">
+    <h2 class="display">Когда клуб в ударе</h2>
+    <p class="note">Час суток, в который рождаются стикеры.</p>
+    <div class="hours" role="img" aria-label="Активность по часам суток"><div class="hour"><div class="hour-bar" style="height:0.0%"></div><span class="hour-tick">00</span><span class="day-tip">00:00 — 0</span></div><div class="hour"><div class="hour-bar" style="height:0.0%"></div><span class="hour-tick">01</span><span class="day-tip">01:00 — 0</span></div><div class="hour"><div class="hour-bar" style="height:0.0%"></div><span class="hour-tick">02</span><span class="day-tip">02:00 — 0</span></div><div class="hour"><div class="hour-bar" style="height:0.0%"></div><span class="hour-tick">03</span><span class="day-tip">03:00 — 0</span></div><div class="hour"><div class="hour-bar" style="height:0.0%"></div><span class="hour-tick">04</span><span class="day-tip">04:00 — 0</span></div><div class="hour"><div class="hour-bar" style="height:0.0%"></div><span class="hour-tick">05</span><span class="day-tip">05:00 — 0</span></div><div class="hour"><div class="hour-bar" style="height:2.8%"></div><span class="hour-tick">06</span><span class="day-tip">06:00 — 1</span></div><div class="hour"><div class="hour-bar" style="height:0.0%"></div><span class="hour-tick">07</span><span class="day-tip">07:00 — 0</span></div><div class="hour"><div class="hour-bar" style="height:2.8%"></div><span class="hour-tick">08</span><span class="day-tip">08:00 — 1</span></div><div class="hour"><div class="hour-bar" style="height:100.0%"></div><span class="hour-tick">09</span><span class="day-tip">09:00 — 36</span></div><div class="hour"><div class="hour-bar" style="height:0.0%"></div><span class="hour-tick">10</span><span class="day-tip">10:00 — 0</span></div><div class="hour"><div class="hour-bar" style="height:0.0%"></div><span class="hour-tick">11</span><span class="day-tip">11:00 — 0</span></div><div class="hour"><div class="hour-bar" style="height:0.0%"></div><span class="hour-tick">12</span><span class="day-tip">12:00 — 0</span></div><div class="hour"><div class="hour-bar" style="height:2.8%"></div><span class="hour-tick">13</span><span class="day-tip">13:00 — 1</span></div><div class="hour"><div class="hour-bar" style="height:0.0%"></div><span class="hour-tick">14</span><span class="day-tip">14:00 — 0</span></div><div class="hour"><div class="hour-bar" style="height:0.0%"></div><span class="hour-tick">15</span><span class="day-tip">15:00 — 0</span></div><div class="hour"><div class="hour-bar" style="height:0.0%"></div><span class="hour-tick">16</span><span class="day-tip">16:00 — 0</span></div><div class="hour"><div class="hour-bar" style="height:0.0%"></div><span class="hour-tick">17</span><span class="day-tip">17:00 — 0</span></div><div class="hour"><div class="hour-bar" style="height:0.0%"></div><span class="hour-tick">18</span><span class="day-tip">18:00 — 0</span></div><div class="hour"><div class="hour-bar" style="height:0.0%"></div><span class="hour-tick">19</span><span class="day-tip">19:00 — 0</span></div><div class="hour"><div class="hour-bar" style="height:2.8%"></div><span class="hour-tick">20</span><span class="day-tip">20:00 — 1</span></div><div class="hour"><div class="hour-bar" style="height:0.0%"></div><span class="hour-tick">21</span><span class="day-tip">21:00 — 0</span></div><div class="hour"><div class="hour-bar" style="height:0.0%"></div><span class="hour-tick">22</span><span class="day-tip">22:00 — 0</span></div><div class="hour"><div class="hour-bar" style="height:11.1%"></div><span class="hour-tick">23</span><span class="day-tip">23:00 — 4</span></div></div>
+  </section>
+
+  <section class="card">
+    <h2 class="display">Из чего собран пак</h2>
+    <p class="note">Форму плашки бот выбирает сам из канонических для WNDR.</p>
+    <ul class="shapes"><li><span class="shape-name">imported</span><span class="shape-track"><span class="shape-fill" style="width:100%"></span></span><span class="shape-n">35</span></li><li><span class="shape-name">stamp</span><span class="shape-track"><span class="shape-fill" style="width:9%"></span></span><span class="shape-n">3</span></li><li><span class="shape-name">wavy-blob</span><span class="shape-track"><span class="shape-fill" style="width:6%"></span></span><span class="shape-n">2</span></li><li><span class="shape-name">rounded-rect</span><span class="shape-track"><span class="shape-fill" style="width:6%"></span></span><span class="shape-n">2</span></li><li><span class="shape-name">starburst</span><span class="shape-track"><span class="shape-fill" style="width:3%"></span></span><span class="shape-n">1</span></li><li><span class="shape-name">oval</span><span class="shape-track"><span class="shape-fill" style="width:3%"></span></span><span class="shape-n">1</span></li></ul>
+  </section>
+</div>
+
+<footer>
+  Обновлено 12.08.2026 00:01 · страница собирается из данных бота ·
+  <a href="https://t.me/addstickers/wndr_club_by_WNDR_stickers_bot">пак в Telegram</a>
+</footer>
+</div>
+</body></html>
