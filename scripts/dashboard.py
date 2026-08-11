@@ -84,6 +84,38 @@ def collect(conn: sqlite3.Connection, bot_id: int | None) -> dict:
     in_pack = q(conn, "SELECT COUNT(*) FROM stickers WHERE in_pack=1")[0][0]
     core = q(conn, "SELECT COUNT(*) FROM stickers WHERE is_core=1")[0][0]
 
+    # Главная метрика. Автор сам решает, достаточно ли хорош его стикер, чтобы
+    # отдать сообществу — это оценка качества генерации его голосом, а не нашим.
+    # Импорт исключаем: те стикеры никто не генерировал и не выбирал.
+    sticker_not_bot = "" if bot_id is None else f" AND user_id != {int(bot_id)}"
+    made = q(
+        conn, "SELECT COUNT(*) FROM stickers WHERE provider!='telegram-import'"
+              f"{sticker_not_bot}"
+    )[0][0]
+    put = q(
+        conn, "SELECT COUNT(*) FROM stickers WHERE provider!='telegram-import' "
+              f"AND ever_in_pack=1{sticker_not_bot}"
+    )[0][0]
+
+    # Вернулся ли человек за вторым стикером. Один — любопытство, второй — привычка.
+    per_person = q(
+        conn, f"SELECT COUNT(*) FROM requests WHERE status='ok'{not_bot} GROUP BY user_id"
+    )
+    once = sum(1 for (n,) in per_person if n == 1)
+    repeat = sum(1 for (n,) in per_person if n > 1)
+
+    # Сколько прошло от знакомства с ботом до первого удачного стикера.
+    activation = [
+        row[0] for row in q(
+            conn,
+            "SELECT CAST((julianday(MIN(r.created_at)) - julianday(u.first_seen)) "
+            "* 86400 AS INTEGER) FROM users u "
+            "JOIN requests r ON r.user_id=u.user_id AND r.status='ok' "
+            f"WHERE 1=1{not_bot.replace('user_id', 'u.user_id')} GROUP BY u.user_id",
+        )
+        if row[0] is not None and row[0] >= 0
+    ]
+
     return {
         "generated_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
         "days": [d.isoformat() for d in days],
@@ -96,6 +128,16 @@ def collect(conn: sqlite3.Connection, bot_id: int | None) -> dict:
         "people": people,
         "in_pack": in_pack,
         "core": core,
+        "made": made,
+        "put": put,
+        "once": once,
+        "repeat": repeat,
+        "activation": sorted(activation),
+        "rejections": q(
+            conn,
+            "SELECT COALESCE(detail,'без причины'), COUNT(*) FROM requests "
+            f"WHERE status='rejected'{not_bot} GROUP BY 1 ORDER BY 2 DESC",
+        ),
         "stickers_total": q(conn, "SELECT COUNT(*) FROM stickers")[0][0],
         "users_total": q(
             conn, f"SELECT COUNT(*) FROM users WHERE 1=1{not_bot}"
@@ -245,6 +287,39 @@ def table(headers: list[str], rows: list[list]) -> str:
     return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
 
 
+def _human_time(seconds: float) -> str:
+    if seconds < 90:
+        return f"{seconds:.0f}с"
+    if seconds < 5400:
+        return f"{seconds / 60:.0f}мин"
+    if seconds < 172800:
+        return f"{seconds / 3600:.0f}ч"
+    return f"{seconds / 86400:.0f}д"
+
+
+def _short_reason(detail: str) -> str:
+    """Причина отказа коротко: полные тексты — это фразы для человека, не метки."""
+    text = (detail or "").strip()
+    known = {
+        "duplicate": "повтор",
+        "Ссылки и упоминания на стикер не ставим.": "ссылка",
+        "Похоже на набор символов — попробуй осмысленную фразу.": "набор символов",
+        "Слишком коротко — напиши фразу целиком.": "слишком коротко",
+        "Такую фразу в общий пак не отдам.": "стоп-слово",
+    }
+    if text in known:
+        return known[text]
+    if text.startswith("Слишком длинно"):
+        return "слишком длинно"
+    if text.startswith("Больше") and "слов" in text:
+        return "больше 8 слов"
+    if text.startswith("Эти символы"):
+        return "чужие символы"
+    if text.startswith("Звёздочки"):
+        return "непарная звёздочка"
+    return text[:28]
+
+
 def stat(value, caption: str, *, accent: bool = False) -> str:
     return (
         f'<div class="stat{" accent" if accent else ""}">'
@@ -261,10 +336,15 @@ def render(d: dict) -> str:
     dau_today = d["dau"].get(today, 0)
     mau_today = d["mau"].get(today, 0)
 
+    # North star — две цифры слева. Всё остальное объясняет их движение.
+    pack_rate = f"{d['put'] / d['made'] * 100:.0f}%" if d["made"] else "—"
+    people_made = d["once"] + d["repeat"]
+    retention = f"{d['repeat'] / people_made * 100:.0f}%" if people_made else "—"
+
     hero = "".join([
-        stat(d["in_pack"], "в паке сейчас", accent=True),
-        stat(d["stickers_total"], "стикеров сделано"),
-        stat(d["users_total"], "человек знает бота"),
+        stat(pack_rate, "сделанного ушло в пак", accent=True),
+        stat(retention, "вернулись за вторым", accent=True),
+        stat(d["in_pack"], "в паке сейчас"),
         stat(success, "запросов дошло до стикера"),
         stat(dau_today, "DAU сегодня"),
         stat(mau_today, "MAU за 30 дней"),
@@ -297,15 +377,65 @@ def render(d: dict) -> str:
     ))
 
     cards.append(card(
-        "Что с запросами",
-        bars(
-            [(k, v) for k, v in sorted(
-                d["statuses"].items(), key=lambda kv: -kv[1])],
-            slot=2,
-        ),
-        note="ok — стикер выдан, rejected — не прошёл проверку фразы, "
-             "failed — упала генерация.",
+        "Ушло ли в пак",
+        "".join([
+            '<div class="stats inline">',
+            stat(d["made"], "сгенерировано"),
+            stat(d["put"], "отдано сообществу"),
+            stat(pack_rate, "доля", accent=True),
+            "</div>",
+        ]),
+        note="Автор сам решает, достаточно ли хорош стикер, чтобы положить его "
+             "в общий пак. Просядет — значит поехало качество генерации, и это "
+             "видно раньше любых жалоб. Импорт не считаем: его никто не выбирал.",
     ))
+
+    cards.append(card(
+        "Вернулись за вторым",
+        "".join([
+            '<div class="stats inline">',
+            stat(d["once"], "сделали один раз"),
+            stat(d["repeat"], "сделали ещё"),
+            stat(retention, "доля", accent=True),
+            "</div>",
+        ]),
+        note="Один стикер — любопытство, второй — привычка. Главное число, "
+             "когда в чате много людей: сотня разовых визитов не спасёт пак.",
+    ))
+
+    reject_total = sum(n for _, n in d["rejections"])
+    funnel_note = (
+        "Отказы — это люди, которые хотели сделать стикер и получили «нет» "
+        "по формальному правилу. Их видно первыми при росте чата."
+    )
+    cards.append(card(
+        "Воронка: где отваливаются",
+        bars(
+            [(k, v) for k, v in sorted(d["statuses"].items(), key=lambda kv: -kv[1])],
+            slot=2,
+        )
+        + (
+            f'<p class="note">Причины отказов ({reject_total}):</p>'
+            + bars([(_short_reason(r), n) for r, n in d["rejections"]], slot=3)
+            if d["rejections"] else ""
+        ),
+        note=funnel_note,
+    ))
+
+    if d["activation"]:
+        s = d["activation"]
+        med = s[len(s) // 2]
+        cards.append(card(
+            "Сколько до первого стикера",
+            "".join([
+                '<div class="stats inline">',
+                stat(_human_time(med), "медиана"),
+                stat(len(s), "человек дошли"),
+                "</div>",
+            ]),
+            note="От знакомства с ботом до первого удачного стикера. Длинный "
+                 "путь означает, что человек ушёл, ничего не получив.",
+        ))
 
     cards.append(card(
         "Провайдеры картинок",
@@ -314,19 +444,9 @@ def render(d: dict) -> str:
              "сгенерированные.",
     ))
 
-    hours = [(f"{h:02d}", d["hours"].get(h, 0)) for h in range(24)]
-    cards.append(card(
-        "Час суток",
-        bars([(h, v) for h, v in hours if v], slot=3) if any(v for _, v in hours)
-        else empty("Пока нет данных."),
-        note="Когда сообщество делает стикеры. Часы без генераций скрыты.",
-    ))
-
-    cards.append(card(
-        "Формы плашек",
-        bars([(s[0], s[1]) for s in d["shapes"]], slot=4),
-        note="Форму выбирает бот случайно из канонических.",
-    ))
+    # «Час суток» и «формы плашек» убраны намеренно: цифры красивые, но ни одно
+    # решение от них не менялось. Данные никуда не делись — если понадобятся,
+    # запрос вернуть на место дешевле, чем каждый раз пролистывать лишнее.
 
     if d["chat_types"]:
         chat_body = bars(
@@ -427,7 +547,13 @@ h1 em {{ font-style:normal; color:var(--accent); }}
   display:grid; gap:12px; margin-bottom:24px;
   grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
 }}
-.stats.inline {{ margin:0; }}
+/* Внутри карточки числа мельче и их до трёх — иначе тройка ломается на 2+1. */
+.stats.inline {{
+  margin:0; gap:8px;
+  grid-template-columns:repeat(auto-fit,minmax(92px,1fr));
+}}
+.stats.inline .stat {{ padding:12px 14px; box-shadow:2px 2px 0 var(--ink); }}
+.stats.inline .stat b {{ font-size:clamp(24px,3vw,32px); }}
 .stat {{
   background:var(--card); border:2px solid var(--ink); border-radius:14px;
   padding:16px 18px; box-shadow:3px 3px 0 var(--ink);
