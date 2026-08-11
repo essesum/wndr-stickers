@@ -382,7 +382,10 @@ def generate_gemini(
     *,
     api_key: str,
     model: str = "gemini-3-pro-image-preview",
-    image_size: str = "2K",
+    # Готовый стикер — 512×512, дальше идёт LANCZOS-даунскейл. Просить 2K
+    # значит платить временем за пиксели, которые тут же выбрасываются;
+    # 1K с запасом перекрывает 512 и режется чище, чем «в размер».
+    image_size: str = "1K",
     proxy: str | None = None,
 ) -> GeneratedImage:
     if not api_key:
