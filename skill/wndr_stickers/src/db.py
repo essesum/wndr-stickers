@@ -7,6 +7,19 @@ from pathlib import Path
 
 import aiosqlite
 
+#: Каждый вызов открывает своё соединение, а генерации идут параллельно
+#: (max_concurrent_generations) вместе с действиями сообщества. В journal_mode
+#: DELETE писатель блокирует читателей целиком, и достаточно одной длинной
+#: записи, чтобы соседний запрос упал в «database is locked». WAL разводит
+#: читателей и писателя, а timeout даёт пережить короткое пересечение писателей.
+BUSY_TIMEOUT_SECONDS = 15.0
+
+
+def connect(path: Path) -> aiosqlite.Connection:
+    """Единая точка подключения: одинаковый busy timeout у всех запросов."""
+    return aiosqlite.connect(path, timeout=BUSY_TIMEOUT_SECONDS)
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     user_id     INTEGER PRIMARY KEY,
@@ -133,7 +146,10 @@ class CommunityAction:
 
 async def init_db(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    async with aiosqlite.connect(path) as db:
+    async with connect(path) as db:
+        # WAL — свойство самого файла, ставится один раз и переживает рестарты.
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA synchronous=NORMAL")
         await db.executescript(SCHEMA)
         for statement in _MIGRATIONS:
             # Колонка уже есть — это норма, база просто новее.
@@ -150,7 +166,7 @@ async def init_db(path: Path) -> None:
 
 async def touch_user(path: Path, user_id: int, username: str | None) -> bool:
     """Регистрируем пользователя. Возвращаем False, если он забанен."""
-    async with aiosqlite.connect(path) as db:
+    async with connect(path) as db:
         await db.execute(
             "INSERT INTO users(user_id, username) VALUES(?, ?) "
             "ON CONFLICT(user_id) DO UPDATE SET username=excluded.username",
@@ -165,7 +181,7 @@ async def touch_user(path: Path, user_id: int, username: str | None) -> bool:
 async def log_request(
     path: Path, user_id: int, phrase: str, status: str, detail: str | None = None
 ) -> int:
-    async with aiosqlite.connect(path) as db:
+    async with connect(path) as db:
         cur = await db.execute(
             "INSERT INTO requests(user_id, phrase, status, detail) VALUES(?,?,?,?)",
             (user_id, phrase, status, detail),
@@ -177,7 +193,7 @@ async def log_request(
 async def update_request(
     path: Path, request_id: int, status: str, detail: str | None = None
 ) -> None:
-    async with aiosqlite.connect(path) as database:
+    async with connect(path) as database:
         await database.execute(
             "UPDATE requests SET status=?, detail=? WHERE id=?",
             (status, detail, request_id),
@@ -188,7 +204,7 @@ async def update_request(
 async def count_requests(path: Path, *, user_id: int | None, hours: int) -> int:
     """Сколько удачных генераций за последние N часов."""
     window = f"-{hours} hours"
-    async with aiosqlite.connect(path) as db:
+    async with connect(path) as db:
         if user_id is None:
             cur = await db.execute(
                 "SELECT COUNT(*) FROM requests WHERE status='ok' "
@@ -217,14 +233,14 @@ async def count_quota_requests(path: Path, *, user_id: int | None, hours: int) -
     if user_id is not None:
         sql += " AND user_id=?"
         params = (window, user_id)
-    async with aiosqlite.connect(path) as database:
+    async with connect(path) as database:
         cur = await database.execute(sql, params)
         row = await cur.fetchone()
     return int(row[0]) if row else 0
 
 
 async def save_sticker(path: Path, *, request_id: int, user_id: int, result) -> int:
-    async with aiosqlite.connect(path) as db:
+    async with connect(path) as db:
         cur = await db.execute(
             "INSERT OR REPLACE INTO stickers"
             "(request_id, user_id, slug, version, phrase, path, raw_path, provider, model, shape)"
@@ -264,7 +280,7 @@ async def mark_in_pack(
     pack: str | None = None,
     file_id: str | None = None,
 ) -> None:
-    async with aiosqlite.connect(path) as db:
+    async with connect(path) as db:
         await db.execute(
             "UPDATE stickers SET in_pack=1, ever_in_pack=1, pack_state='in', "
             "emoji=?, pack_name=?, file_id=? "
@@ -276,7 +292,7 @@ async def mark_in_pack(
 
 async def mark_removed_from_pack(path: Path, sticker_id: int) -> None:
     """Стикер убран из набора. Файл на диске остаётся — можно вернуть обратно."""
-    async with aiosqlite.connect(path) as db:
+    async with connect(path) as db:
         await db.execute(
             "UPDATE stickers SET in_pack=0, pack_state='out', file_id=NULL WHERE id=?",
             (sticker_id,),
@@ -294,7 +310,7 @@ async def find_in_pack(path: Path, phrase: str) -> StickerRow | None:
     needle = " ".join(phrase.split()).casefold()
     if not needle:
         return None
-    async with aiosqlite.connect(path) as db:
+    async with connect(path) as db:
         cur = await db.execute(
             f"SELECT {_STICKER_COLUMNS} FROM stickers WHERE in_pack=1 "
             "ORDER BY created_at DESC, id DESC"
@@ -311,7 +327,7 @@ async def find_removed(path: Path, phrase: str) -> StickerRow | None:
     needle = " ".join(phrase.split()).casefold()
     if not needle:
         return None
-    async with aiosqlite.connect(path) as database:
+    async with connect(path) as database:
         cur = await database.execute(
             f"SELECT {_STICKER_COLUMNS} FROM stickers WHERE in_pack=0 AND ever_in_pack=1 "
             "AND pack_state='out' "
@@ -334,7 +350,7 @@ async def claim_pack_operation(path: Path, sticker_id: int, operation: str) -> b
     if operation not in transitions:
         raise ValueError(f"unknown pack operation: {operation}")
     expected_in_pack, expected_state = transitions[operation]
-    async with aiosqlite.connect(path) as database:
+    async with connect(path) as database:
         cur = await database.execute(
             "UPDATE stickers SET pack_state=? WHERE id=? AND in_pack=? AND pack_state=?",
             (operation, sticker_id, expected_in_pack, expected_state),
@@ -345,7 +361,7 @@ async def claim_pack_operation(path: Path, sticker_id: int, operation: str) -> b
 
 async def release_pack_operation(path: Path, sticker_id: int, operation: str) -> None:
     """Откатить claim после ошибки Telegram, не меняя фактическое членство."""
-    async with aiosqlite.connect(path) as database:
+    async with connect(path) as database:
         await database.execute(
             "UPDATE stickers SET pack_state=CASE WHEN in_pack=1 THEN 'in' ELSE 'out' END "
             "WHERE id=? AND pack_state=?",
@@ -361,7 +377,7 @@ async def log_community_action(
     action: str,
     detail: str | None = None,
 ) -> int:
-    async with aiosqlite.connect(path) as database:
+    async with connect(path) as database:
         cur = await database.execute(
             "INSERT INTO community_actions(sticker_id, user_id, action, detail) VALUES(?,?,?,?)",
             (sticker_id, user_id, action, detail),
@@ -374,7 +390,7 @@ async def count_community_actions(
     path: Path, *, user_id: int, action: str, hours: int
 ) -> int:
     window = f"-{hours} hours"
-    async with aiosqlite.connect(path) as database:
+    async with connect(path) as database:
         cur = await database.execute(
             "SELECT COUNT(*) FROM community_actions WHERE user_id=? AND action=? "
             "AND created_at >= datetime('now', ?)",
@@ -385,7 +401,7 @@ async def count_community_actions(
 
 
 async def seconds_since_last_community_action(path: Path, sticker_id: int) -> int | None:
-    async with aiosqlite.connect(path) as database:
+    async with connect(path) as database:
         cur = await database.execute(
             "SELECT CAST((julianday('now') - julianday(created_at)) * 86400 AS INTEGER) "
             "FROM community_actions WHERE sticker_id=? ORDER BY id DESC LIMIT 1",
@@ -396,7 +412,7 @@ async def seconds_since_last_community_action(path: Path, sticker_id: int) -> in
 
 
 async def recent_community_actions(path: Path, limit: int = 15) -> list[CommunityAction]:
-    async with aiosqlite.connect(path) as database:
+    async with connect(path) as database:
         cur = await database.execute(
             "SELECT a.id, a.sticker_id, s.phrase, a.user_id, u.username, a.action, "
             "a.detail, a.created_at FROM community_actions a "
@@ -409,7 +425,7 @@ async def recent_community_actions(path: Path, limit: int = 15) -> list[Communit
 
 
 async def get_sticker(path: Path, sticker_id: int) -> StickerRow | None:
-    async with aiosqlite.connect(path) as db:
+    async with connect(path) as db:
         cur = await db.execute(
             f"SELECT {_STICKER_COLUMNS} FROM stickers WHERE id=?", (sticker_id,)
         )
@@ -418,7 +434,7 @@ async def get_sticker(path: Path, sticker_id: int) -> StickerRow | None:
 
 
 async def pack_stickers(path: Path) -> list[StickerRow]:
-    async with aiosqlite.connect(path) as db:
+    async with connect(path) as db:
         cur = await db.execute(
             f"SELECT {_STICKER_COLUMNS} FROM stickers WHERE in_pack=1 ORDER BY created_at"
         )
@@ -427,7 +443,7 @@ async def pack_stickers(path: Path) -> list[StickerRow]:
 
 
 async def count_in_pack(path: Path, pack: str) -> int:
-    async with aiosqlite.connect(path) as db:
+    async with connect(path) as db:
         cur = await db.execute(
             "SELECT COUNT(*) FROM stickers WHERE in_pack=1 AND pack_name=?", (pack,)
         )
@@ -436,7 +452,7 @@ async def count_in_pack(path: Path, pack: str) -> int:
 
 
 async def set_banned(path: Path, user_id: int, banned: bool) -> None:
-    async with aiosqlite.connect(path) as db:
+    async with connect(path) as db:
         await db.execute(
             "INSERT INTO users(user_id, banned) VALUES(?, ?) "
             "ON CONFLICT(user_id) DO UPDATE SET banned=excluded.banned",
@@ -446,7 +462,7 @@ async def set_banned(path: Path, user_id: int, banned: bool) -> None:
 
 
 async def stats(path: Path) -> dict:
-    async with aiosqlite.connect(path) as db:
+    async with connect(path) as db:
         out = {}
         for key, sql in {
             "users": "SELECT COUNT(*) FROM users",

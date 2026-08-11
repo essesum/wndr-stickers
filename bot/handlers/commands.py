@@ -1,6 +1,7 @@
 """Команды бота."""
 from __future__ import annotations
 
+import html
 from pathlib import Path
 
 from aiogram import F, Router
@@ -110,7 +111,8 @@ def build_router(settings: Settings) -> Router:
 
     @router.message(Command("pack"))
     async def _pack(m: Message) -> None:
-        me = await m.bot.get_me()
+        assert m.bot is not None
+        me = await m.bot.me()
         name = pack.pack_name(settings.pack_slug, me.username or "")
         rows = await db.pack_stickers(settings.db_path)
         if not rows:
@@ -145,9 +147,12 @@ def build_router(settings: Settings) -> Router:
         verbs = {"added": "добавил", "removed": "убрал", "restored": "вернул"}
         lines = []
         for action in actions:
-            actor = f"@{action.username}" if action.username else "участник"
+            # /history показывает чужие фразы и чужие ники: всё экранируем, иначе
+            # одна старая строка с «<» роняет весь ответ на parse_mode=HTML.
+            actor = f"@{html.escape(action.username)}" if action.username else "участник"
             lines.append(
-                f"{actor} {verbs.get(action.action, action.action)} «{action.phrase}»"
+                f"{actor} {verbs.get(action.action, action.action)} "
+                f"«{html.escape(action.phrase)}»"
             )
         await m.answer("Последние действия:\n" + "\n".join(lines))
 

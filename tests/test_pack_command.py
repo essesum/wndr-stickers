@@ -42,8 +42,11 @@ async def test_pack_command_lists_all_pack_continuations(tmp_path):
 
     router = commands.build_router(settings)
     callback = next(h.callback for h in router.message.handlers if h.callback.__name__ == "_pack")
+    me = SimpleNamespace(id=1, username="wndr_bot")
     message = SimpleNamespace(
-        bot=SimpleNamespace(get_me=AsyncMock(return_value=SimpleNamespace(username="wndr_bot"))),
+        bot=SimpleNamespace(
+            me=AsyncMock(return_value=me), get_me=AsyncMock(return_value=me)
+        ),
         answer=AsyncMock(),
     )
 

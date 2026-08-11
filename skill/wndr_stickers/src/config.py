@@ -69,10 +69,20 @@ class Settings(BaseSettings):
     # Runtime живёт вне Katya AI/Vault/Hermes. Это отдельная data-plane зона.
     state_dir: Path = Path("~/.wndr-stickers/state").expanduser()
     output_dir: Path = Path("~/.wndr-stickers/output").expanduser()
+    log_dir: Path = Path("~/.wndr-stickers/logs").expanduser()
+
+    #: Бот живёт под launchd месяцами, а переподключения aiogram пишутся по две
+    #: строки на попытку. Без ротации файл растёт без потолка.
+    log_max_bytes: int = 5_000_000
+    log_backup_count: int = 3
 
     @property
     def db_path(self) -> Path:
         return self.state_dir / "stickers.db"
+
+    @property
+    def log_path(self) -> Path:
+        return self.log_dir / "wndr.log"
 
     @property
     def lock_path(self) -> Path:

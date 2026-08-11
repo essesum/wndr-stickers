@@ -17,6 +17,14 @@ from skill.wndr_stickers.src import db, naming
 from skill.wndr_stickers.src.config import Settings
 
 
+def _fake_bot(*, username: str, id: int = 1) -> SimpleNamespace:
+    """Дубль Bot с обоими вариантами: .me() кэширующий и .get_me() сырой."""
+    me = SimpleNamespace(id=id, username=username)
+    return SimpleNamespace(
+        me=AsyncMock(return_value=me), get_me=AsyncMock(return_value=me)
+    )
+
+
 class _Result:
     def __init__(self, path: Path, phrase: str = "я так чувствую"):
         self.slug = "ya-tak"
@@ -91,7 +99,7 @@ async def test_add_failure_rolls_back_retryable_state(state, monkeypatch):
     settings, sticker_id = state
     row = await db.get_sticker(settings.db_path, sticker_id)
     user = User(id=222, is_bot=False, first_name="Ann", username="ann")
-    bot = SimpleNamespace(get_me=AsyncMock(return_value=SimpleNamespace(username="wndr_bot")))
+    bot = _fake_bot(username="wndr_bot")
 
     async def fail(*args, **kwargs):
         raise RuntimeError("telegram unavailable")
@@ -110,7 +118,7 @@ async def test_add_success_records_actor_and_public_membership(state, monkeypatc
     settings, sticker_id = state
     row = await db.get_sticker(settings.db_path, sticker_id)
     user = User(id=222, is_bot=False, first_name="Ann", username="ann")
-    bot = SimpleNamespace(get_me=AsyncMock(return_value=SimpleNamespace(username="wndr_bot")))
+    bot = _fake_bot(username="wndr_bot")
     monkeypatch.setattr(
         generate.pack,
         "add_with_overflow",
@@ -137,9 +145,7 @@ async def test_help_handler_never_calls_generation(tmp_path, monkeypatch):
         chat=SimpleNamespace(type=ChatType.PRIVATE),
         text="что ты умеешь?",
         reply_to_message=None,
-        bot=SimpleNamespace(
-            get_me=AsyncMock(return_value=SimpleNamespace(id=999, username="WNDR_bot"))
-        ),
+        bot=_fake_bot(id=999, username="WNDR_bot"),
         answer=AsyncMock(),
         reply=AsyncMock(),
     )

@@ -15,6 +15,7 @@ import base64
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -27,6 +28,22 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 log = logging.getLogger(__name__)
 
 TIMEOUT = httpx.Timeout(300.0, connect=30.0)
+
+#: httpx кладёт полный URL в текст HTTPStatusError, а текст провайдерской ошибки
+#: уезжает и в лог, и в SQLite `requests.detail`. Любой ключ, попавший в query
+#: или в заголовок, обязан быть вычищен до того, как станет записью на диске.
+_SECRET_QUERY_RE = re.compile(
+    r"(?i)\b(key|api[-_]?key|access[-_]?token|token|password|secret)=[^\s&\"'>]+"
+)
+_BEARER_RE = re.compile(r"(?i)\bbearer\s+[\w.\-]+")
+_CREDENTIALED_URL_RE = re.compile(r"(?i)\b(https?://)[^/\s:@]+:[^/\s@]+@")
+
+
+def redact(text: str) -> str:
+    """Убрать секреты из текста ошибки перед логом и записью в базу."""
+    text = _SECRET_QUERY_RE.sub(lambda m: f"{m.group(1)}=<redacted>", text)
+    text = _BEARER_RE.sub("Bearer <redacted>", text)
+    return _CREDENTIALED_URL_RE.sub(r"\1<redacted>@", text)
 
 
 class ImageGenerationError(RuntimeError):
@@ -391,15 +408,18 @@ def generate_gemini(
             "imageConfig": {"image_size": image_size},
         },
     }
+    # Ключ идёт заголовком, а не в query: httpx печатает URL внутри
+    # HTTPStatusError, и `?key=...` утёк бы в логи и в SQLite вместе с текстом
+    # ошибки. Заголовок в текст исключения не попадает.
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}"
-        f":streamGenerateContent?key={api_key}"
+        ":streamGenerateContent"
     )
 
     @_RETRY
     def _call() -> httpx.Response:
         with _client(proxy) as client:
-            r = client.post(url, json=payload)
+            r = client.post(url, json=payload, headers={"x-goog-api-key": api_key})
         _raise_for_soft_failure(r, "gemini")
         r.raise_for_status()
         return r
@@ -457,10 +477,11 @@ def generate(prompt: str, reference: Path, settings) -> GeneratedImage:
                 )
             failures.append(f"{name}: неизвестный провайдер")
         except ProviderUnavailable as exc:
-            log.warning("провайдер %s недоступен, идём дальше: %s", name, exc)
-            failures.append(str(exc))
+            log.warning("провайдер %s недоступен, идём дальше: %s", name, redact(str(exc)))
+            failures.append(redact(str(exc)))
         except Exception as exc:  # noqa: BLE001 — падение одного не должно рвать цепочку
-            log.exception("провайдер %s упал", name)
-            failures.append(f"{name}: {type(exc).__name__} {exc}")
+            # Без redact текст httpx-ошибки принёс бы сюда полный URL провайдера.
+            log.error("провайдер %s упал: %s", name, redact(f"{type(exc).__name__} {exc}"))
+            failures.append(redact(f"{name}: {type(exc).__name__} {exc}"))
 
     raise ImageGenerationError("ни один провайдер не отдал картинку:\n" + "\n".join(failures))

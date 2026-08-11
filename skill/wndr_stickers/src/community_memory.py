@@ -13,8 +13,9 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
-import aiosqlite
 import numpy as np
+
+from .db import connect
 
 log = logging.getLogger(__name__)
 
@@ -91,7 +92,7 @@ async def remember(
     if vector is None:
         return False
     try:
-        async with aiosqlite.connect(db_path) as database:
+        async with connect(db_path) as database:
             await database.execute(
                 "INSERT OR REPLACE INTO community_vectors"
                 "(sticker_id, phrase, normalised, slug, version, status, vector_json) "
@@ -115,7 +116,7 @@ async def remember(
 
 async def find_similar(db_path: Path, phrase: str, *, limit: int = 3) -> list[Similar]:
     try:
-        async with aiosqlite.connect(db_path) as database:
+        async with connect(db_path) as database:
             cursor = await database.execute(
                 "SELECT v.sticker_id, v.phrase, v.normalised, v.slug, v.version, "
                 "v.vector_json FROM community_vectors v "
@@ -153,7 +154,7 @@ async def find_similar(db_path: Path, phrase: str, *, limit: int = 3) -> list[Si
 
 async def rebuild_from_db(db_path: Path) -> int:
     """Пересобрать локальные vectors из канонической таблицы stickers."""
-    async with aiosqlite.connect(db_path) as database:
+    async with connect(db_path) as database:
         cursor = await database.execute("SELECT id, phrase, slug, version FROM stickers")
         rows = await cursor.fetchall()
         await database.execute("DELETE FROM community_vectors")

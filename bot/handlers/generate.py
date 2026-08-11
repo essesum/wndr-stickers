@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import logging
 from pathlib import Path
 
 from aiogram import Bot, F, Router
+from aiogram.enums import ChatType
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     CallbackQuery,
@@ -32,6 +35,26 @@ from skill.wndr_stickers.src.config import Settings
 
 log = logging.getLogger(__name__)
 PACK_MUTATION_LOCK = asyncio.Lock()
+
+
+#: id в SQLite — знаковый 64-битный; больше него sqlite3 бросает OverflowError
+#: прямо на execute(), то есть падение обработчика вместо отказа.
+_MAX_SQLITE_INT = 2**63 - 1
+
+
+def _callback_sticker_id(data: str | None) -> int | None:
+    """id из callback_data кнопки.
+
+    Клиент присылает эту строку сам, так что она может быть какой угодно —
+    голый `int()` здесь падал с ValueError. `isdigit()` тоже недостаточно: он
+    пропускает не-ASCII цифры («٣»), а id у нас всегда обычное число.
+    """
+    _, _, raw = (data or "").partition(":")
+    raw = raw.strip()
+    if not (raw.isascii() and raw.isdigit()):
+        return None
+    value = int(raw)
+    return value if value <= _MAX_SQLITE_INT else None
 
 
 def _keyboard(sticker_id: int) -> InlineKeyboardMarkup:
@@ -207,7 +230,7 @@ async def _add_row_to_pack(
         if not await db.claim_pack_operation(settings.db_path, row.id, operation):
             return False, "Этот стикер уже кто-то меняет. Попробуй через минуту."
 
-        me = await bot.get_me()
+        me = await bot.me()
         try:
             name, link, file_id = await pack.add_with_overflow(
                 bot,
@@ -229,7 +252,7 @@ async def _add_row_to_pack(
         await db.log_community_action(settings.db_path, row.id, user.id, action, name)
         await _rebuild_public_zip(settings)
         verb = "Вернул" if restoring else "Добавил"
-        return True, f"{verb} «{fresh.phrase}» в общий пак:\n{link}"
+        return True, f"{verb} «{html.escape(fresh.phrase)}» в общий пак:\n{link}"
 
 
 async def _restore(m: Message, settings: Settings, phrase: str) -> None:
@@ -245,7 +268,10 @@ async def _restore(m: Message, settings: Settings, phrase: str) -> None:
         return
     row = await db.find_removed(settings.db_path, phrase)
     if row is None:
-        await m.reply(f"Не нашёл удалённый стикер «{phrase}».")
+        # Текст сюда приходит как есть, без moderation.check_phrase: экранируем,
+        # иначе `<b>` ломает parse_mode=HTML, а `<a href>` даёт чужую ссылку
+        # голосом бота.
+        await m.reply(f"Не нашёл удалённый стикер «{html.escape(phrase)}».")
         return
     _, message = await _add_row_to_pack(m.bot, settings, row, user, restoring=True)
     await m.reply(message)
@@ -292,7 +318,8 @@ async def _produce(
         )
         if hit is not None and not force:
             await m.answer(
-                f"Похожее уже есть: «{hit.phrase}» ({hit.slug}-v{hit.version}).\n"
+                f"Похожее уже есть: «{html.escape(hit.phrase)}» "
+                f"({html.escape(hit.slug)}-v{hit.version}).\n"
                 "Если всё равно нужен свой вариант — пришли фразу ещё раз "
                 "с «!» в начале."
             )
@@ -347,8 +374,12 @@ async def _produce(
         version=result.version,
     )
 
-    caption = voice.done(result.phrase)
-    await notice.delete()
+    caption = voice.done(html.escape(result.phrase))
+    # Стикер уже сгенерирован, оплачен и записан. Убрать «колдую…» — косметика,
+    # и её неудача (истёкшее окно удаления, сетевой сбой) не повод не отдать
+    # человеку то, за что он потратил квоту.
+    with contextlib.suppress(TelegramAPIError):
+        await notice.delete()
     # документом — чтобы Telegram не пережал файл и он остался пригодным для пака
     await m.answer_document(
         FSInputFile(result.path),
@@ -376,10 +407,15 @@ def build_router(settings: Settings) -> Router:
     @router.message(F.text & ~F.text.startswith("/"))
     async def _plain_text(m: Message) -> None:
         assert m.bot is not None
-        me = await m.bot.get_me()
-        # В группе бот отвечает только на обращение: тегом или ответом на его
-        # сообщение. Иначе он нарисует стикер на каждую реплику чата.
-        in_group = m.chat.type in ("group", "supergroup")
+        # .me() кэширует, .get_me() — нет. Здесь это вызов на каждое сообщение
+        # чата, то есть лишний round-trip к api.telegram.org перед любой работой.
+        me = await m.bot.me()
+        # Тег обязателен везде, кроме личной переписки: в общем чате бот иначе
+        # нарисует стикер на каждую реплику. Раньше здесь был белый список
+        # ("group", "supergroup") — он пропускал канал, где chat.type ==
+        # "channel", и гейт молча выключался. Проверяем private, а не
+        # перечисляем групповые типы: новый тип чата не откроет бота заново.
+        is_private = m.chat.type == ChatType.PRIVATE
         replied_to_bot = bool(
             m.reply_to_message
             and m.reply_to_message.from_user
@@ -388,7 +424,7 @@ def build_router(settings: Settings) -> Router:
         got = intent.parse(
             m.text or "",
             bot_username=me.username,
-            require_mention=in_group and not replied_to_bot,
+            require_mention=not is_private and not replied_to_bot,
         )
         if not got.addressed:
             return
@@ -419,11 +455,15 @@ def build_router(settings: Settings) -> Router:
 
     @router.callback_query(F.data.startswith("again:"))
     async def _again(query: CallbackQuery) -> None:
-        await query.answer("Делаю новый вариант")
-        sticker_id = int((query.data or "0:0").split(":", 1)[1])
+        sticker_id = _callback_sticker_id(query.data)
+        if sticker_id is None:
+            await query.answer("Кнопка испорчена")
+            return
         row = await db.get_sticker(settings.db_path, sticker_id)
         if row is None or not isinstance(query.message, Message):
+            await query.answer("Стикер потерялся")
             return
+        await query.answer("Делаю новый вариант")
         # force=True: кнопка и означает «сделай ещё один». Без этого проверка
         # дублей отбивала собственную же кнопку — первое, что видит человек,
         # нажавший «Ещё вариант», это отказ «похожее уже есть».
@@ -438,7 +478,10 @@ def build_router(settings: Settings) -> Router:
 
     @router.callback_query(F.data.startswith("pack:"))
     async def _to_pack(query: CallbackQuery) -> None:
-        sticker_id = int((query.data or "0:0").split(":", 1)[1])
+        sticker_id = _callback_sticker_id(query.data)
+        if sticker_id is None:
+            await query.answer("Кнопка испорчена")
+            return
         row = await db.get_sticker(settings.db_path, sticker_id)
         if row is None:
             await query.answer("Стикер потерялся")
