@@ -1,7 +1,45 @@
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from skill.wndr_stickers.src.cutout import save_webp
+from skill.wndr_stickers.src.style import ACCENT, BLACK, CREAM
 from skill.wndr_stickers.src.verify import verify_sticker, verify_text
+
+
+def _ornate(tmp_path, name: str) -> Image.Image:
+    """Плашка с густым орнаментом: много тонких контуров, а значит много
+    полупрозрачных краёв между двумя каноническими цветами."""
+    img = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((40, 40, 472, 472), fill=(*CREAM, 255))
+    for radius in range(60, 230, 7):          # концентрические тонкие кольца
+        draw.ellipse(
+            (256 - radius, 256 - radius, 256 + radius, 256 + radius),
+            outline=(*(ACCENT if radius % 14 else BLACK), 255),
+            width=1,
+        )
+    return img
+
+
+def test_ornament_is_not_mistaken_for_a_palette_violation(tmp_path):
+    """Сглаживание между двумя каноническими цветами — не чужой цвет.
+
+    Проверка считала иначе и штрафовала за густоту орнамента: чем наряднее
+    плашка, тем больше у неё краёв и тем вернее она проваливала приёмку.
+    """
+    path = save_webp(_ornate(tmp_path, "ornate"), tmp_path / "ornate.webp")
+    result = verify_sticker(path, enforce_style=True)
+    assert result.ok, result.problems
+    assert result.palette_fraction > 0.95
+
+
+def test_foreign_colour_is_still_rejected(tmp_path):
+    """Обратная сторона: послабление не должно пропускать реально чужой цвет."""
+    img = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+    ImageDraw.Draw(img).ellipse((40, 40, 472, 472), fill=(30, 90, 220, 255))
+    path = save_webp(img, tmp_path / "blue.webp")
+    result = verify_sticker(path, enforce_style=True)
+    assert not result.ok
+    assert any("палитра" in problem for problem in result.problems)
 
 
 def _canvas(bbox=(40, 40, 472, 472), size=(512, 512)) -> Image.Image:

@@ -2,14 +2,41 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from itertools import combinations
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 
 from .style import ACCENT, BLACK, CREAM, NEAR_WHITE
 
 MAX_BYTES = 512 * 1024
 REQUIRED_SIZE = (512, 512)
+
+
+def _palette_distance(pixels: np.ndarray) -> np.ndarray:
+    """Насколько далеко пиксели от палитры WNDR.
+
+    Считаем расстояние не до самих цветов, а до отрезков между ними. Пиксель на
+    границе оранжевого и кремового — это сглаживание контура, а не чужой цвет:
+    учитывать его как нарушение значит штрафовать за густоту орнамента. Именно
+    так и было: чем наряднее плашка, тем больше у неё краёв и тем вернее она
+    проваливала приёмку, хотя палитру никто не нарушал.
+    """
+    palette = np.array([ACCENT, BLACK, CREAM, NEAR_WHITE], dtype=np.float64)
+    points = pixels.astype(np.float64)
+
+    best = np.linalg.norm(points[:, None, :] - palette[None, :, :], axis=2).min(axis=1)
+    for first, second in combinations(range(len(palette)), 2):
+        a, b = palette[first], palette[second]
+        segment = b - a
+        length_sq = float(segment @ segment)
+        if length_sq == 0:
+            continue
+        t = np.clip(((points - a) @ segment) / length_sq, 0.0, 1.0)
+        projected = a + t[:, None] * segment
+        best = np.minimum(best, np.linalg.norm(points - projected, axis=1))
+    return best
 
 
 @dataclass
@@ -69,24 +96,11 @@ def verify_sticker(
 
     palette_fraction = None
     if enforce_style:
-        palette = (ACCENT, BLACK, CREAM, NEAR_WHITE)
-        rgba = image.tobytes()
-        opaque_pixels = [
-            (rgba[i], rgba[i + 1], rgba[i + 2])
-            for i in range(0, len(rgba), 4)
-            if rgba[i + 3] > 16
-        ]
-        if opaque_pixels:
-            tolerance_sq = palette_tolerance**2
-            canonical = sum(
-                min(
-                    sum((channel - target[i]) ** 2 for i, channel in enumerate(pixel))
-                    for target in palette
-                )
-                <= tolerance_sq
-                for pixel in opaque_pixels
-            )
-            palette_fraction = canonical / len(opaque_pixels)
+        rgba = np.asarray(image, dtype=np.uint8)
+        opaque_pixels = rgba[rgba[:, :, 3] > 16][:, :3]
+        if len(opaque_pixels):
+            distance = _palette_distance(opaque_pixels)
+            palette_fraction = float((distance <= palette_tolerance).mean())
             if palette_fraction < min_palette_fraction:
                 problems.append(
                     "палитра вне WNDR-контракта: "

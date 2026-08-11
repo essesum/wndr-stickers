@@ -67,11 +67,16 @@ def make_sticker(
     if shape is None:
         shape = style.pick_shape(allow_arrows=settings.allow_arrow_shapes, rng=rng)
     combo = style.pick_combo(rng)
+    # Плотность и мотив выбираются на каждый стикер. Без этого пак получался
+    # одинаковым: сперва все плашки были голые, потом все — нарядные.
+    density = style.pick_density(rng)
+    motif = motif or style.pick_motif(rng)
 
     prompt = style.build_plate_prompt(
         shape=shape,
         combo=combo,
         motif=motif,
+        density=density,
         allow_arrows=settings.allow_arrow_shapes,
     )
 

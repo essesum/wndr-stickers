@@ -109,6 +109,82 @@ def shape_by_key(key: str) -> Shape | None:
     return next((s for s in SHAPES if s.key == key), None)
 
 
+# --- Ornament density --------------------------------------------------------
+# Референс WNDR неоднороден: билет и «было!» почти голые, венок из роз и солнце
+# с луной — богатые. Если всегда рисовать нарядно, получается своя монотонность,
+# просто с другой стороны. Плотность выбирается на каждый стикер отдельно.
+@dataclass(frozen=True)
+class Density:
+    key: str
+    clause: str
+    weight: int
+
+
+DENSITIES: tuple[Density, ...] = (
+    Density(
+        "bare",
+        "Keep the plate almost bare: the die-cut outline, one thin inner keyline, "
+        "and at most a single small mark (a star, a short ray, a tiny sprig) "
+        "touching the very edge. Let the empty plate do the work.",
+        3,
+    ),
+    Density(
+        "framed",
+        "Decorate the FRAME moderately: layered keylines following the contour and "
+        "a restrained repeating edge motif or small accents in the corners. "
+        "Nothing enters the clean central area.",
+        4,
+    ),
+    Density(
+        "ornate",
+        "Decorate the FRAME generously in engraved vintage-label fashion: layered "
+        "keylines, and ornament worked all around the border — stars and sparkles, "
+        "rays, botanical sprigs, a repeating edge pattern. Rich border, calm centre. "
+        "The ornament must never enter the clean central area.",
+        3,
+    ),
+)
+
+
+def pick_density(rng: random.Random | None = None) -> Density:
+    rng = rng or random.Random()
+    return rng.choices(DENSITIES, weights=[d.weight for d in DENSITIES], k=1)[0]
+
+
+def density_by_key(key: str) -> Density | None:
+    return next((d for d in DENSITIES if d.key == key), None)
+
+
+# --- Motif bank --------------------------------------------------------------
+# Картинка внутри стикера. Механизм в коде был с самого начала, но pipeline
+# всегда передавал motif=None, поэтому ни один стикер его не получил.
+MOTIFS: tuple[str, ...] = (
+    "a pair of engraved roses with leaves",
+    "a crescent moon with small stars",
+    "an engraved sun face with rays",
+    "a sprig of wheat",
+    "a lightning bolt",
+    "an open hand with rays above the palm",
+    "a mountain range with a rising sun",
+    "an engraved flame",
+    "a leafy laurel branch",
+    "an eye with radiating lashes",
+    "a blooming daisy seen from above",
+    "a comet with a curling tail",
+)
+
+#: Насколько часто внутри стикера появляется картинка. Не всегда: в референсе
+#: иллюстрированных примерно каждый третий, остальные держатся на типографике.
+MOTIF_CHANCE = 0.35
+
+
+def pick_motif(rng: random.Random | None = None) -> str | None:
+    rng = rng or random.Random()
+    if rng.random() >= MOTIF_CHANCE:
+        return None
+    return rng.choice(list(MOTIFS))
+
+
 # --- Colour pairings ---------------------------------------------------------
 # Exactly two base colours per plate. A third colour appears only as the later
 # code-rendered accent on 1-3 words.
@@ -175,16 +251,9 @@ illustration with heavy black linework and flat fills. It must not enter the cle
 central area.\
 """
 
-#: Раньше здесь стояло «keep the plate bare … at most one tiny mark», и модель
-#: честно рисовала пустую плашку. Богатство живёт в рамке — просить его надо
-#: прямо, иначе его не будет.
-BARE_CLAUSE = """\
-Decorate the FRAME generously in engraved vintage-label fashion: layered keylines \
-following the contour, and ornament worked into the border — small stars and \
-sparkles, short rays, botanical sprigs, or a repeating edge motif, whatever suits \
-the shape. The ornament belongs to the border and the corners; it must never \
-enter the clean central area.\
-"""
+#: Оставлено для совместимости: раньше это был единственный вариант оформления и
+#: он требовал пустой плашки. Теперь оформление выбирается из DENSITIES.
+BARE_CLAUSE = DENSITIES[0].clause
 
 ILLUSTRATION_PROMPT = """\
 Using the attached WNDR sheet as a STRICT style reference, draw ONE die-cut \
@@ -210,13 +279,18 @@ def build_plate_prompt(
     placement: str = "bottom",
     clean_band: str = "60%",
     allow_arrows: bool = True,
+    density: Density | None = None,
 ) -> str:
-    """Prompt for an empty plate — user phrase is rendered later by code."""
+    """Prompt for an empty plate — user phrase is rendered later by code.
+
+    Мотив и плотность независимы: картинка может лежать и на почти голой плашке,
+    и внутри богатой рамки. Это и даёт разброс, ради которого всё затевалось.
+    """
     _ = allow_arrows  # Backward-compatible argument; arrows are canonical in v0.1.
+    parts = [(density or DENSITIES[0]).clause]
     if motif:
-        illustration = ILLUSTRATION_CLAUSE.format(motif=motif, placement=placement)
-    else:
-        illustration = BARE_CLAUSE
+        parts.append(ILLUSTRATION_CLAUSE.format(motif=motif, placement=placement))
+    illustration = "\n\n".join(parts)
     return PLATE_PROMPT.format(
         shape_prompt=shape.prompt,
         fill=combo["fill"],
