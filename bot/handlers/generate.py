@@ -313,9 +313,16 @@ async def _produce(
         await m.answer("Доступ закрыт.")
         return
 
+    # Откуда пришёл запрос. Нужно, чтобы потом отличить личку от общего чата:
+    # это разные сценарии, и по ним по-разному читается,живёт ли бот в клубе.
+    chat_type = m.chat.type if m.chat else None
+
     verdict = phrase_moderation.check_phrase(phrase)
     if not verdict:
-        await db.log_request(settings.db_path, user.id, phrase, "rejected", verdict.reason)
+        await db.log_request(
+            settings.db_path, user.id, phrase, "rejected", verdict.reason,
+            chat_type=chat_type,
+        )
         await m.answer(verdict.reason)
         return
 
@@ -333,10 +340,15 @@ async def _produce(
                 "Если всё равно нужен свой вариант — пришли фразу ещё раз "
                 "с «!» в начале."
             )
-            await db.log_request(settings.db_path, user.id, phrase, "rejected", "duplicate")
+            await db.log_request(
+                settings.db_path, user.id, phrase, "rejected", "duplicate",
+                chat_type=chat_type,
+            )
             return
 
-    allowance = await ratelimit.reserve(settings.db_path, settings, user.id, phrase)
+    allowance = await ratelimit.reserve(
+        settings.db_path, settings, user.id, phrase, chat_type=chat_type
+    )
     if not allowance or allowance.request_id is None:
         await m.answer(allowance.reason)
         return

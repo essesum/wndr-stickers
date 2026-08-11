@@ -65,14 +65,20 @@ async def check(db_path: Path, settings: Settings, user_id: int) -> Allowance:
 
 
 async def reserve(
-    db_path: Path, settings: Settings, user_id: int, phrase: str
+    db_path: Path,
+    settings: Settings,
+    user_id: int,
+    phrase: str,
+    chat_type: str | None = None,
 ) -> Allowance:
     """Атомарно занять слот; единственный runtime защищён InstanceLock."""
     async with _RESERVATION_LOCK:
         allowance = await check(db_path, settings, user_id)
         if not allowance:
             return allowance
-        request_id = await db.log_request(db_path, user_id, phrase, "pending")
+        request_id = await db.log_request(
+            db_path, user_id, phrase, "pending", chat_type=chat_type
+        )
         return Allowance(True, request_id=request_id)
 
 

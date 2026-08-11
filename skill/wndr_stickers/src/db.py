@@ -120,6 +120,10 @@ _MIGRATIONS = (
     # скриптом, а НЕ при старте: иначе каждый новый стикер становился бы
     # неприкосновенным после ближайшего перезапуска.
     "ALTER TABLE stickers ADD COLUMN is_core INTEGER NOT NULL DEFAULT 0",
+    # Аналитика. Раньше не писалось вообще, поэтому по старым строкам обе
+    # колонки останутся пустыми — это честная дыра в истории, а не потеря.
+    "ALTER TABLE requests ADD COLUMN chat_type TEXT",
+    "ALTER TABLE stickers ADD COLUMN seconds REAL",
 )
 
 
@@ -186,12 +190,18 @@ async def touch_user(path: Path, user_id: int, username: str | None) -> bool:
 
 
 async def log_request(
-    path: Path, user_id: int, phrase: str, status: str, detail: str | None = None
+    path: Path,
+    user_id: int,
+    phrase: str,
+    status: str,
+    detail: str | None = None,
+    chat_type: str | None = None,
 ) -> int:
     async with connect(path) as db:
         cur = await db.execute(
-            "INSERT INTO requests(user_id, phrase, status, detail) VALUES(?,?,?,?)",
-            (user_id, phrase, status, detail),
+            "INSERT INTO requests(user_id, phrase, status, detail, chat_type) "
+            "VALUES(?,?,?,?,?)",
+            (user_id, phrase, status, detail, chat_type),
         )
         await db.commit()
         return int(cur.lastrowid or 0)
@@ -250,8 +260,9 @@ async def save_sticker(path: Path, *, request_id: int, user_id: int, result) -> 
     async with connect(path) as db:
         cur = await db.execute(
             "INSERT OR REPLACE INTO stickers"
-            "(request_id, user_id, slug, version, phrase, path, raw_path, provider, model, shape)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?)",
+            "(request_id, user_id, slug, version, phrase, path, raw_path, provider, "
+            "model, shape, seconds)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (
                 request_id,
                 user_id,
@@ -263,6 +274,7 @@ async def save_sticker(path: Path, *, request_id: int, user_id: int, result) -> 
                 result.provider,
                 result.model,
                 result.shape,
+                getattr(result, "seconds", None),
             ),
         )
         await db.commit()
