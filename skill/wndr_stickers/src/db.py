@@ -104,6 +104,27 @@ CREATE INDEX IF NOT EXISTS idx_community_actions_user_time
     ON community_actions(user_id, action, created_at);
 CREATE INDEX IF NOT EXISTS idx_community_actions_sticker_time
     ON community_actions(sticker_id, created_at);
+
+-- Просьбы убрать чужой стикер. Один человек — один голос за стикер, поэтому
+-- ключ составной: накрутить, нажимая много раз, нельзя.
+CREATE TABLE IF NOT EXISTS pack_votes (
+    sticker_id  INTEGER NOT NULL REFERENCES stickers(id),
+    user_id     INTEGER NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (sticker_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pack_votes_sticker ON pack_votes(sticker_id, created_at);
+
+-- Нажатия кнопок. Раньше их не видел никто: в базу попадало только то, чем
+-- дело кончилось, а какой дорогой человек туда пришёл — терялось.
+CREATE TABLE IF NOT EXISTS ui_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    user_id     INTEGER NOT NULL,
+    detail      TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ui_events_name_time ON ui_events(name, created_at);
 """
 
 #: Колонки, добавленные после первого релиза. Ставим по одной, молча пропуская
@@ -218,6 +239,16 @@ async def update_request(
         await database.commit()
 
 
+async def get_request_phrase(path: Path, request_id: int) -> str | None:
+    """Фраза заявки. Нужна кнопкам повтора: в callback_data влезает только id."""
+    async with connect(path) as db:
+        cur = await db.execute(
+            "SELECT phrase FROM requests WHERE id=?", (request_id,)
+        )
+        row = await cur.fetchone()
+    return row[0] if row else None
+
+
 async def count_requests(path: Path, *, user_id: int | None, hours: int) -> int:
     """Сколько удачных генераций за последние N часов."""
     window = f"-{hours} hours"
@@ -308,6 +339,70 @@ async def mark_in_pack(
             "WHERE id=?",
             (emoji, pack, file_id, sticker_id),
         )
+        await db.commit()
+
+
+async def log_ui_event(
+    path: Path, name: str, user_id: int, detail: str | None = None
+) -> None:
+    """Записать нажатие кнопки. Тихо: метрика не должна ломать само действие."""
+    with contextlib.suppress(Exception):
+        async with connect(path) as db:
+            await db.execute(
+                "INSERT INTO ui_events(name, user_id, detail) VALUES(?,?,?)",
+                (name, user_id, detail),
+            )
+            await db.commit()
+
+
+async def toggle_vote(
+    path: Path, sticker_id: int, user_id: int, *, ttl_days: int
+) -> tuple[bool, int]:
+    """Поставить или снять голос за удаление. Возвращает (голос стоит, сколько всего).
+
+    Повторное нажатие снимает свой голос: передумать должно быть так же легко,
+    как попросить. Протухшие голоса вычищаются здесь же, чтобы забытый месяц
+    назад не досчитал стикер до удаления.
+    """
+    window = f"-{ttl_days} days"
+    async with connect(path) as db:
+        await db.execute(
+            "DELETE FROM pack_votes WHERE created_at < datetime('now', ?)", (window,)
+        )
+        cur = await db.execute(
+            "DELETE FROM pack_votes WHERE sticker_id=? AND user_id=?",
+            (sticker_id, user_id),
+        )
+        standing = cur.rowcount == 0
+        if standing:
+            await db.execute(
+                "INSERT INTO pack_votes(sticker_id, user_id) VALUES(?,?)",
+                (sticker_id, user_id),
+            )
+        await db.commit()
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM pack_votes WHERE sticker_id=?", (sticker_id,)
+        )
+        row = await cur.fetchone()
+    return standing, int(row[0]) if row else 0
+
+
+async def count_votes(path: Path, sticker_id: int, *, ttl_days: int) -> int:
+    window = f"-{ttl_days} days"
+    async with connect(path) as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM pack_votes WHERE sticker_id=? "
+            "AND created_at >= datetime('now', ?)",
+            (sticker_id, window),
+        )
+        row = await cur.fetchone()
+    return int(row[0]) if row else 0
+
+
+async def clear_votes(path: Path, sticker_id: int) -> None:
+    """После удаления голоса не нужны — стикер уже ушёл."""
+    async with connect(path) as db:
+        await db.execute("DELETE FROM pack_votes WHERE sticker_id=?", (sticker_id,))
         await db.commit()
 
 

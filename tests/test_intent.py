@@ -222,6 +222,8 @@ def test_natural_how_do_you_work_is_help():
     ],
 )
 def test_restore_is_not_drawn_as_a_new_sticker(text):
+    """Возврата больше нет, но просьба вернуть не должна уйти в рисование:
+    человек ждёт ответа, а не стикера со словом «верни»."""
     got = parse(text)
-    assert got.action is Action.RESTORE
+    assert got.action is Action.GONE
     assert got.phrase == "я так чувствую"

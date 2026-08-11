@@ -106,7 +106,7 @@ async def test_add_failure_rolls_back_retryable_state(state, monkeypatch):
 
     monkeypatch.setattr(generate.pack, "add_with_overflow", fail)
     ok, message = await generate._add_row_to_pack(
-        bot, settings, row, user, restoring=False
+        bot, settings, row, user
     )
     assert not ok
     assert "состояние сохранено" in message.lower()
@@ -125,7 +125,7 @@ async def test_add_success_records_actor_and_public_membership(state, monkeypatc
         AsyncMock(return_value=("wndr_by_wndr_bot", "https://t.me/addstickers/wndr", "file-1")),
     )
 
-    ok, _ = await generate._add_row_to_pack(bot, settings, row, user, restoring=False)
+    ok, _ = await generate._add_row_to_pack(bot, settings, row, user)
     assert ok
     fresh = await db.get_sticker(settings.db_path, sticker_id)
     assert fresh.in_pack and fresh.pack_state == "in" and fresh.file_id == "file-1"

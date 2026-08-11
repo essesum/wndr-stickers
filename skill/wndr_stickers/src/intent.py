@@ -15,7 +15,10 @@ _QUOTES = '"“”«»„‘’\''
 
 _DRAW_VERBS = ("сделай", "создай", "нарисуй", "сгенерируй", "сделать", "нарисовать")
 _DELETE_VERBS = ("удали", "убери", "удалить", "убрать", "снеси", "выкинь")
-_RESTORE_VERBS = ("верни", "вернуть", "восстанови", "восстановить")
+#: Возврата в паке больше нет — «передумал» решается новой генерацией. Глаголы
+#: оставлены здесь, чтобы «верни в пак …» не ушло молча рисоваться как фраза:
+#: человек ждал возврата, ему нужен ответ, а не стикер со словом «верни».
+_GONE_VERBS = ("верни", "вернуть", "восстанови", "восстановить")
 _LIST_PHRASES = (
     "что в паке",
     "покажи пак",
@@ -44,7 +47,8 @@ _HELP_RE = re.compile(
 class Action(Enum):
     DRAW = "draw"
     DELETE = "delete"
-    RESTORE = "restore"
+    #: Просьба вернуть удалённое. Возврата нет — бот объясняет это, а не рисует.
+    GONE = "gone"
     LIST = "list"
     HELP = "help"
 
@@ -109,10 +113,10 @@ def parse(
         rest = _SCOPE_RE.sub("", rest)
         return Intent(Action.DELETE, _strip_quotes(rest), force, addressed)
 
-    rest = _starts_with(raw, _RESTORE_VERBS)
+    rest = _starts_with(raw, _GONE_VERBS)
     if rest is not None:
         rest = _SCOPE_RE.sub("", rest)
-        return Intent(Action.RESTORE, _strip_quotes(rest), force, addressed)
+        return Intent(Action.GONE, _strip_quotes(rest), force, addressed)
 
     rest = _starts_with(raw, _DRAW_VERBS)
     if rest is not None:

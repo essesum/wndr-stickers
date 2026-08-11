@@ -116,19 +116,38 @@ async def test_delete_lookup_treats_bare_digits_as_phrase(settings):
     assert found is not None and found.id == numeric_phrase
 
 
-def test_delete_hint_lists_copyable_delete_commands():
+def test_delete_hint_lists_copyable_delete_commands(settings):
     rows = [
         db.StickerRow(17, 111, "lyudi", 1, "люди <очень> ценны", "/tmp/a.webp", True),
         db.StickerRow(18, 111, "wndr", 1, "WNDR club", "/tmp/b.webp", True),
     ]
 
-    text = generate._delete_hint(rows)
+    text = generate._delete_hint_chunks(rows, settings, 111)[0]
 
     assert "<code>удали #17</code> — люди &lt;очень&gt; ценны" in text
     assert "<code>удали #18</code> — WNDR club" in text
 
 
-def test_delete_hint_chunks_large_pack():
+def test_delete_hint_marks_what_each_person_may_touch(settings):
+    """Права видно до нажатия, а не после: своё, чужое и основа выглядят по-разному."""
+    rows = [
+        db.StickerRow(1, 222, "a", 1, "своя", "/tmp/a.webp", True),
+        db.StickerRow(2, 333, "b", 1, "чужая", "/tmp/b.webp", True),
+        db.StickerRow(3, 333, "c", 1, "основа", "/tmp/c.webp", True, is_core=True),
+    ]
+
+    text = generate._delete_hint_chunks(rows, settings, 222)[0]
+    assert "(твой)" in text and "(чужой)" in text and "(основа пака)" in text
+
+    keyboard = generate._pack_list_keyboard(rows, settings, 222)
+    labels = [row[0].text for row in keyboard.inline_keyboard]
+    # У ядра кнопки нет вообще, чужое — просьба, своё — удаление.
+    assert len(labels) == 2
+    assert any(t.startswith("✕") for t in labels)
+    assert any(t.startswith("🙋") for t in labels)
+
+
+def test_delete_hint_chunks_large_pack(settings):
     rows = [
         db.StickerRow(
             i,
@@ -142,7 +161,7 @@ def test_delete_hint_chunks_large_pack():
         for i in range(1, 121)
     ]
 
-    chunks = generate._delete_hint_chunks(rows, max_chars=500)
+    chunks = generate._delete_hint_chunks(rows, settings, 111, max_chars=500)
 
     assert len(chunks) > 1
     assert all(len(chunk) <= 500 for chunk in chunks)

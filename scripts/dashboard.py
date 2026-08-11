@@ -133,6 +133,23 @@ def collect(conn: sqlite3.Connection, bot_id: int | None) -> dict:
         "once": once,
         "repeat": repeat,
         "activation": sorted(activation),
+        # Кто больше всех нагенерил. Считаем стикеры, а не заявки: отказы и
+        # сбои в зачёт не идут, иначе «лидером» станет тот, у кого не выходило.
+        "leaderboard": q(
+            conn,
+            "SELECT COALESCE(u.username, 'id' || s.user_id) AS who, COUNT(*) n, "
+            "  SUM(s.ever_in_pack) put "
+            "FROM stickers s LEFT JOIN users u ON u.user_id=s.user_id "
+            f"WHERE s.provider!='telegram-import'{sticker_not_bot.replace('user_id', 's.user_id')} "
+            "GROUP BY who ORDER BY n DESC, put DESC",
+        ),
+        "buttons": q(
+            conn,
+            "SELECT name, COUNT(*) FROM ui_events GROUP BY 1 ORDER BY 2 DESC",
+        ),
+        "buttons_people": q(
+            conn, "SELECT COUNT(DISTINCT user_id) FROM ui_events"
+        )[0][0],
         "rejections": q(
             conn,
             "SELECT COALESCE(detail,'без причины'), COUNT(*) FROM requests "
@@ -297,6 +314,20 @@ def _human_time(seconds: float) -> str:
     return f"{seconds / 86400:.0f}д"
 
 
+def _button_label(name: str) -> str:
+    """Имя кнопки человеческим языком; `rm:*` разложены по правам нажавшего."""
+    known = {
+        "again": "🎲 ещё вариант",
+        "pack": "➕ в пак",
+        "redo": "🔁 ещё раз / всё равно",
+        "rm:author": "✕ убрал свой",
+        "rm:owner": "✕ убрала владелец",
+        "rm:vote": "🙋 просьба убрать чужой",
+        "rm:core": "✕ по основе (отказ)",
+    }
+    return known.get(name, name)
+
+
 def _short_reason(detail: str) -> str:
     """Причина отказа коротко: полные тексты — это фразы для человека, не метки."""
     text = (detail or "").strip()
@@ -366,15 +397,50 @@ def render(d: dict) -> str:
         wide=True,
     ))
 
+    board = d["leaderboard"]
+    medals = ["🥇", "🥈", "🥉"]
     cards.append(card(
-        "Кто сколько сделал",
-        bars([(p[0], p[1]) for p in d["people"]], slot=0)
+        "Кто больше всех нагенерил",
+        bars(
+            [
+                (f"{medals[i] if i < 3 else '  '} {who}", n)
+                for i, (who, n, _put) in enumerate(board)
+            ],
+            slot=0,
+        )
+        + table(
+            ["место", "кто", "стикеров", "из них в паке"],
+            [[i + 1, who, n, put or 0] for i, (who, n, put) in enumerate(board)],
+        ),
+        note="Считаем сделанные стикеры, а не попытки: отказы и сбои в зачёт не "
+             "идут, иначе в лидеры выходит тот, у кого не получалось. Импорт "
+             "исходного пака тоже не в счёт — его никто не генерировал.",
+        wide=True,
+    ))
+
+    cards.append(card(
+        "Кто сколько запрашивал",
+        bars([(p[0], p[1]) for p in d["people"]], slot=1)
         + table(
             ["кто", "стикеров", "отклонено", "сбоев"],
             [list(p[:4]) for p in d["people"]],
         ),
         note="Полосы — удачные генерации; в таблице видно и отказы.",
     ))
+
+    if d["buttons"]:
+        cards.append(card(
+            "Кнопки: что нажимают",
+            bars([(_button_label(n), c) for n, c in d["buttons"]], slot=4)
+            + f'<p class="note">Разных людей нажимали: {d["buttons_people"]}</p>',
+            note="Раньше в базу попадало только то, чем дело кончилось, а какой "
+                 "дорогой человек туда пришёл — терялось.",
+        ))
+    else:
+        cards.append(card(
+            "Кнопки: что нажимают",
+            empty("Копится с 12 августа — раньше нажатия не записывались."),
+        ))
 
     cards.append(card(
         "Ушло ли в пак",

@@ -119,11 +119,104 @@ async def test_core_sticker_survives_a_community_delete(tmp_path, monkeypatch):
     assert (await db.get_sticker(settings.db_path, sticker_id)).in_pack
     assert "основы пака" in message.reply.await_args.args[0]
 
+    # Второй стикер нужен, чтобы не упереться в защиту последнего: пустой набор
+    # Telegram удаляет вместе со ссылкой.
+    other = await _add_sticker(settings, user_id=222, phrase="вторая", slug="vtoraya")
+    await db.mark_in_pack(settings.db_path, other, "🔥", "wndr", "file-2")
+
     # владелец — может
     message.from_user = User(id=111, is_bot=False, first_name="K", username="k")
     await generate._remove(message, settings, "основа")
     deleted.assert_awaited_once()
     assert not (await db.get_sticker(settings.db_path, sticker_id)).in_pack
+
+
+async def test_last_sticker_cannot_be_removed(tmp_path):
+    """Пустой набор Telegram удаляет, а имя удалённого не переиспользуется —
+    ссылка, которую все добавили, умерла бы навсегда."""
+    settings = Settings(
+        telegram_owner_id=111, state_dir=tmp_path, output_dir=tmp_path / "o"
+    )
+    await db.init_db(settings.db_path)
+    only = await _add_sticker(settings, user_id=111, phrase="один", slug="odin")
+    await db.mark_in_pack(settings.db_path, only, "🔥", "wndr", "file-only")
+
+    deleted = AsyncMock()
+    row = await db.get_sticker(settings.db_path, only)
+    ok, message = await generate._drop_from_pack(
+        SimpleNamespace(delete_sticker_from_set=deleted), settings, row, 111, "owner"
+    )
+
+    assert not ok
+    deleted.assert_not_awaited()
+    assert "последний" in message
+    assert (await db.get_sticker(settings.db_path, only)).in_pack
+
+
+async def test_foreign_sticker_needs_the_full_vote(tmp_path):
+    """Чужой стикер не убирается в одиночку — сколько бы раз ни нажимать."""
+    settings = Settings(
+        telegram_owner_id=111, state_dir=tmp_path, output_dir=tmp_path / "o",
+        votes_to_remove=3,
+    )
+    await db.init_db(settings.db_path)
+    theirs = await _add_sticker(settings, user_id=222, phrase="чужая", slug="chuzhaya")
+    await db.mark_in_pack(settings.db_path, theirs, "🔥", "wndr", "file-x")
+    filler = await _add_sticker(settings, user_id=222, phrase="вторая", slug="vtoraya")
+    await db.mark_in_pack(settings.db_path, filler, "🔥", "wndr", "file-y")
+
+    deleted = AsyncMock()
+    bot = SimpleNamespace(delete_sticker_from_set=deleted)
+    row = await db.get_sticker(settings.db_path, theirs)
+
+    def voter(uid: int) -> User:
+        return User(id=uid, is_bot=False, first_name=f"U{uid}", username=f"u{uid}")
+
+    # Один человек, сколько бы раз ни жал, даёт ровно один голос.
+    await generate._vote_to_remove(bot, settings, row, voter(333))
+    await generate._vote_to_remove(bot, settings, row, voter(333))  # снял
+    await generate._vote_to_remove(bot, settings, row, voter(333))  # поставил снова
+    assert await db.count_votes(settings.db_path, theirs, ttl_days=7) == 1
+    deleted.assert_not_awaited()
+    assert (await db.get_sticker(settings.db_path, theirs)).in_pack
+
+    await generate._vote_to_remove(bot, settings, row, voter(444))
+    deleted.assert_not_awaited()
+
+    # Третий голос добирает порог — стикер уходит.
+    message = await generate._vote_to_remove(bot, settings, row, voter(555))
+    deleted.assert_awaited_once_with(sticker="file-x")
+    assert not (await db.get_sticker(settings.db_path, theirs)).in_pack
+    assert "Убрал" in message
+    # Голоса после удаления не нужны.
+    assert await db.count_votes(settings.db_path, theirs, ttl_days=7) == 0
+
+
+async def test_author_removes_own_without_any_votes(tmp_path):
+    settings = Settings(
+        telegram_owner_id=111, state_dir=tmp_path, output_dir=tmp_path / "o"
+    )
+    await db.init_db(settings.db_path)
+    await db.touch_user(settings.db_path, 222, "ann")
+    mine = await _add_sticker(settings, user_id=222, phrase="моя", slug="moya")
+    await db.mark_in_pack(settings.db_path, mine, "🔥", "wndr", "file-mine")
+    filler = await _add_sticker(settings, user_id=333, phrase="вторая", slug="vtoraya")
+    await db.mark_in_pack(settings.db_path, filler, "🔥", "wndr", "file-2")
+
+    deleted = AsyncMock()
+    message = SimpleNamespace(
+        from_user=User(id=222, is_bot=False, first_name="Ann", username="ann"),
+        bot=SimpleNamespace(delete_sticker_from_set=deleted),
+        reply=AsyncMock(),
+    )
+    await generate._remove(message, settings, "моя")
+
+    deleted.assert_awaited_once_with(sticker="file-mine")
+    assert not (await db.get_sticker(settings.db_path, mine)).in_pack
+    # Возврата больше нет: ответ должен говорить это прямо, а не обещать его.
+    answer = message.reply.await_args.args[0].lower()
+    assert "может вернуть" not in answer and "верни в пак" not in answer
+    assert "не вернуть" in answer
 
 
 async def _add_sticker(settings, *, user_id: int, phrase: str, slug: str):
@@ -232,10 +325,12 @@ def test_callback_sticker_id_never_raises_on_client_supplied_data(data, expected
     assert generate._callback_sticker_id(data) == expected
 
 
-async def test_restore_escapes_phrase_from_the_user(tmp_path):
-    """«верни в пак <b>…» не должен ломать parse_mode и вставлять чужой HTML."""
+async def test_delete_of_missing_phrase_escapes_user_text(tmp_path):
+    """Текст сюда приходит без moderation.check_phrase: «<a href>» дал бы чужую
+    ссылку голосом бота, а сломанный тег уронил бы ответ на parse_mode=HTML."""
     settings = Settings(telegram_owner_id=111, state_dir=tmp_path, output_dir=tmp_path / "o")
     await db.init_db(settings.db_path)
+    await db.touch_user(settings.db_path, 222, "ann")
     message = SimpleNamespace(
         from_user=User(id=222, is_bot=False, first_name="Ann", username="ann"),
         bot=SimpleNamespace(),
@@ -243,9 +338,9 @@ async def test_restore_escapes_phrase_from_the_user(tmp_path):
     )
 
     injection = '<a href="https://evil.example">t.me/wndr</a>'
-    await generate._restore(message, settings, injection)
+    await generate._remove(message, settings, injection)
 
-    sent = message.reply.await_args.args[0]
+    sent = message.reply.await_args_list[0].args[0]
     assert "<a href=" not in sent
     assert html.escape(injection) in sent
 
