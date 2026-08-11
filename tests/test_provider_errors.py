@@ -57,16 +57,18 @@ def test_httpx_status_error_text_is_redacted_before_it_is_stored():
 @pytest.mark.parametrize(
     "raw",
     [
-        "Authorization: Bearer sk-live-abcdef123456",
-        "token=ghp_abcdef123456",
-        "api_key=sk-secret-value",
-        "https://user:hunter2@proxy.internal:8080 refused",
+        "Authorization: Bearer NOT-A-REAL-TOKEN-FOR-TESTS",
+        "token=NOT-A-REAL-TOKEN-FOR-TESTS",
+        "api_key=NOT-A-REAL-TOKEN-FOR-TESTS",
+        "https://user:NOT-A-REAL-PASSWORD@proxy.internal:8080 refused",
     ],
 )
 def test_redact_removes_every_known_secret_shape(raw):
+    # Значения намеренно нечитаемы как секреты: иначе сканеры вроде gitleaks
+    # помечают собственные тесты как утечку и прячут настоящие находки в шуме.
     cleaned = imagegen.redact(raw)
-    for secret in ("sk-live-abcdef123456", "ghp_abcdef123456", "sk-secret-value", "hunter2"):
-        assert secret not in cleaned
+    assert "NOT-A-REAL-TOKEN-FOR-TESTS" not in cleaned
+    assert "NOT-A-REAL-PASSWORD" not in cleaned
 
 
 def _png():
