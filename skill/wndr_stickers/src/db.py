@@ -115,6 +115,11 @@ _MIGRATIONS = (
     "ALTER TABLE stickers ADD COLUMN file_id TEXT",
     "ALTER TABLE stickers ADD COLUMN ever_in_pack INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE stickers ADD COLUMN pack_state TEXT NOT NULL DEFAULT 'out'",
+    # Ядро пака: стикеры, зафиксированные до открытия бота сообществу. Их не
+    # убирает никто, кроме владельца. Флаг проставляется один раз отдельным
+    # скриптом, а НЕ при старте: иначе каждый новый стикер становился бы
+    # неприкосновенным после ближайшего перезапуска.
+    "ALTER TABLE stickers ADD COLUMN is_core INTEGER NOT NULL DEFAULT 0",
 )
 
 
@@ -130,6 +135,8 @@ class StickerRow:
     pack_state: str = "out"
     file_id: str | None = None
     pack_name: str | None = None
+    #: Часть замороженного ядра — убрать может только владелец.
+    is_core: bool = False
 
 
 @dataclass(frozen=True)
@@ -263,13 +270,15 @@ async def save_sticker(path: Path, *, request_id: int, user_id: int, result) -> 
 
 
 _STICKER_COLUMNS = (
-    "id, user_id, slug, version, phrase, path, in_pack, pack_state, file_id, pack_name"
+    "id, user_id, slug, version, phrase, path, in_pack, pack_state, file_id, "
+    "pack_name, is_core"
 )
 
 
 def _sticker(row) -> StickerRow:
     return StickerRow(
-        row[0], row[1], row[2], row[3], row[4], row[5], bool(row[6]), row[7], row[8], row[9]
+        row[0], row[1], row[2], row[3], row[4], row[5], bool(row[6]), row[7], row[8],
+        row[9], bool(row[10]),
     )
 
 

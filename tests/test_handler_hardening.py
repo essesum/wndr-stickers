@@ -15,7 +15,7 @@ from aiogram.enums import ChatType
 from aiogram.types import User
 
 from bot.handlers import commands, generate
-from skill.wndr_stickers.src import db
+from skill.wndr_stickers.src import db, ratelimit
 from skill.wndr_stickers.src.config import Settings
 
 
@@ -80,6 +80,82 @@ async def test_mention_still_works_everywhere(tmp_path, monkeypatch, chat_type):
     await callback(message)
     assert produce.await_count == 1
     assert produce.await_args.args[2] == "это величие"
+
+
+async def test_core_sticker_survives_a_community_delete(tmp_path, monkeypatch):
+    """Ядро не убирает никто, кроме владельца, — даже участник с правом удалять."""
+    settings = Settings(
+        telegram_owner_id=111, state_dir=tmp_path, output_dir=tmp_path / "o"
+    )
+    await db.init_db(settings.db_path)
+    await db.touch_user(settings.db_path, 222, "ann")
+    path = settings.stickers_dir / "core-v1.webp"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"webp")
+    request_id = await db.log_request(settings.db_path, 111, "основа", "ok")
+    sticker_id = await db.save_sticker(
+        settings.db_path,
+        request_id=request_id,
+        user_id=111,
+        result=SimpleNamespace(
+            slug="core", version=1, phrase="основа", path=str(path),
+            raw_path=str(path), provider="t", model="t", shape="cloud",
+        ),
+    )
+    await db.mark_in_pack(settings.db_path, sticker_id, "🔥", "wndr", "file-core")
+    async with db.connect(settings.db_path) as conn:
+        await conn.execute("UPDATE stickers SET is_core=1 WHERE id=?", (sticker_id,))
+        await conn.commit()
+
+    deleted = AsyncMock()
+    message = SimpleNamespace(
+        from_user=User(id=222, is_bot=False, first_name="Ann", username="ann"),
+        bot=SimpleNamespace(delete_sticker_from_set=deleted),
+        reply=AsyncMock(),
+    )
+    await generate._remove(message, settings, "основа")
+
+    deleted.assert_not_awaited()
+    assert (await db.get_sticker(settings.db_path, sticker_id)).in_pack
+    assert "основы пака" in message.reply.await_args.args[0]
+
+    # владелец — может
+    message.from_user = User(id=111, is_bot=False, first_name="K", username="k")
+    await generate._remove(message, settings, "основа")
+    deleted.assert_awaited_once()
+    assert not (await db.get_sticker(settings.db_path, sticker_id)).in_pack
+
+
+async def test_zero_limit_means_no_limit_but_still_counted(tmp_path):
+    """Снятая квота не должна отключать подсчёт — цифры нужны для замера."""
+    settings = Settings(
+        telegram_owner_id=111, state_dir=tmp_path, output_dir=tmp_path / "o",
+        rate_per_user_hour=0, rate_per_user_day=0, rate_global_day=0,
+    )
+    await db.init_db(settings.db_path)
+
+    for _ in range(50):
+        allowance = await ratelimit.reserve(settings.db_path, settings, 222, "фраза")
+        assert allowance, "лимит снят — отказа быть не должно"
+        await db.update_request(settings.db_path, allowance.request_id, "ok")
+
+    assert await ratelimit.remaining(settings.db_path, settings, 222) == {
+        "hour": None, "day": None, "global": None
+    }
+    spent = await ratelimit.used(settings.db_path, settings, 222)
+    assert spent["day"] == 50 and spent["global"] == 50
+
+
+async def test_limits_still_bite_when_configured(tmp_path):
+    settings = Settings(
+        telegram_owner_id=111, state_dir=tmp_path, output_dir=tmp_path / "o",
+        rate_per_user_hour=3, rate_per_user_day=0, rate_global_day=0,
+    )
+    await db.init_db(settings.db_path)
+    for _ in range(3):
+        allowance = await ratelimit.reserve(settings.db_path, settings, 222, "ф")
+        await db.update_request(settings.db_path, allowance.request_id, "ok")
+    assert not await ratelimit.reserve(settings.db_path, settings, 222, "ф")
 
 
 @pytest.mark.parametrize(

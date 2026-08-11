@@ -100,13 +100,28 @@ def build_router(settings: Settings) -> Router:
         if not m.from_user:
             return
         left = await ratelimit.remaining(settings.db_path, settings, m.from_user.id)
+        # Когда лимиты сняты, «осталось» бессмысленно. Показываем расход: это
+        # ровно та цифра, ради которой лимиты и снимали — посмотреть, сколько
+        # сообщество генерит на самом деле.
+        if all(value is None for value in left.values()):
+            spent = await ratelimit.used(settings.db_path, settings, m.from_user.id)
+            await m.answer(
+                "Лимитов сейчас нет — генерируй сколько нужно.\n"
+                f"Ты сделала за сутки: <b>{spent['day']}</b>.\n"
+                f"Сообщество за сутки: <b>{spent['global']}</b>."
+            )
+            return
         if m.from_user.id == settings.telegram_owner_id:
             await m.answer("Ты владелец — лимитов нет.")
             return
+
+        def show(value: int | None) -> str:
+            return "без лимита" if value is None else f"<b>{value}</b>"
+
         await m.answer(
-            f"Осталось стикеров: <b>{left['hour']}</b> в этот час, "
-            f"<b>{left['day']}</b> за сутки.\n"
-            f"Общий запас сообщества на сегодня: <b>{left['global']}</b>."
+            f"Осталось стикеров: {show(left['hour'])} в этот час, "
+            f"{show(left['day'])} за сутки.\n"
+            f"Общий запас сообщества на сегодня: {show(left['global'])}."
         )
 
     @router.message(Command("pack"))
