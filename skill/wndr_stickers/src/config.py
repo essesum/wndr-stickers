@@ -58,12 +58,15 @@ class Settings(BaseSettings):
     # Самоуправление общего пака
     rate_removals_per_user_day: int = 5
     pack_action_cooldown_seconds: int = 30
-    #: Сколько разных людей должны попросить убрать ЧУЖОЙ стикер, чтобы он ушёл.
-    #: Свой автор убирает сам, ядро — только владелец. Порог намеренно высокий:
-    #: удаление необратимо, а «передумал» решается новой генерацией.
-    votes_to_remove: int = 6
-    #: Голос протухает, чтобы забытый год назад не сработал внезапно.
-    vote_ttl_days: int = 7
+    #: Модерация вместо голосования (решение Кати, 2026-08-12): чужой стикер
+    #: убирает его автор либо модератор клуба. Дима — основатель, Ира — менеджер;
+    #: хочешь убрать чужой — пишешь модератору, он убирает через бота.
+    #: Username в Telegram можно сменить, поэтому рядом поддержан список ID —
+    #: если задан, он работает даже после смены ника.
+    moderator_usernames: str = "ddumik,IrinaFedyay"
+    moderator_ids: str = ""
+    #: Кому писать с просьбой убрать чужой стикер.
+    moderator_contact: str = "@IrinaFedyay"
 
     # Квоты
     rate_per_user_hour: int = 5
@@ -163,6 +166,25 @@ class Settings(BaseSettings):
         if self.access_mode == "open":
             return True
         return user_id in self.allowlist
+
+    @property
+    def moderator_mentions(self) -> list[str]:
+        """Ники модераторов в исходном порядке и регистре — для текстов бота."""
+        out: list[str] = []
+        for chunk in self.moderator_usernames.replace(";", ",").split(","):
+            chunk = chunk.strip().lstrip("@")
+            if chunk:
+                out.append(chunk)
+        return out
+
+    def is_moderator(self, user_id: int, username: str | None = None) -> bool:
+        if user_id in self._ids(self.moderator_ids):
+            return True
+        if not username:
+            return False
+        return username.lstrip("@").lower() in {
+            name.lower() for name in self.moderator_mentions
+        }
 
 
 @lru_cache

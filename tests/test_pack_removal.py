@@ -141,10 +141,13 @@ def test_delete_hint_marks_what_each_person_may_touch(settings):
 
     keyboard = generate._pack_list_keyboard(rows, settings, 222)
     labels = [row[0].text for row in keyboard.inline_keyboard]
-    # У ядра кнопки нет вообще, чужое — просьба, своё — удаление.
-    assert len(labels) == 2
-    assert any(t.startswith("✕") for t in labels)
-    assert any(t.startswith("🙋") for t in labels)
+    # Кнопка только у своего: чужой убирает модератор, у ядра кнопки нет.
+    assert labels == ["✕ своя"]
+
+    # Модератор (дефолтные ники клуба) видит ✕ у всего, кроме ядра.
+    mod_keyboard = generate._pack_list_keyboard(rows, settings, 999, "IrinaFedyay")
+    mod_labels = [row[0].text for row in mod_keyboard.inline_keyboard]
+    assert mod_labels == ["✕ своя", "✕ чужая"]
 
 
 def test_delete_hint_chunks_large_pack(settings):

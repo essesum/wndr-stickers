@@ -105,8 +105,9 @@ CREATE INDEX IF NOT EXISTS idx_community_actions_user_time
 CREATE INDEX IF NOT EXISTS idx_community_actions_sticker_time
     ON community_actions(sticker_id, created_at);
 
--- Просьбы убрать чужой стикер. Один человек — один голос за стикер, поэтому
--- ключ составной: накрутить, нажимая много раз, нельзя.
+-- Историческая таблица голосования за удаление. Голосование убрано
+-- 2026-08-12 (чужой стикер убирает автор или модератор клуба); таблица
+-- остаётся, чтобы не терять историю и не мигрировать живые базы.
 CREATE TABLE IF NOT EXISTS pack_votes (
     sticker_id  INTEGER NOT NULL REFERENCES stickers(id),
     user_id     INTEGER NOT NULL,
@@ -353,57 +354,6 @@ async def log_ui_event(
                 (name, user_id, detail),
             )
             await db.commit()
-
-
-async def toggle_vote(
-    path: Path, sticker_id: int, user_id: int, *, ttl_days: int
-) -> tuple[bool, int]:
-    """Поставить или снять голос за удаление. Возвращает (голос стоит, сколько всего).
-
-    Повторное нажатие снимает свой голос: передумать должно быть так же легко,
-    как попросить. Протухшие голоса вычищаются здесь же, чтобы забытый месяц
-    назад не досчитал стикер до удаления.
-    """
-    window = f"-{ttl_days} days"
-    async with connect(path) as db:
-        await db.execute(
-            "DELETE FROM pack_votes WHERE created_at < datetime('now', ?)", (window,)
-        )
-        cur = await db.execute(
-            "DELETE FROM pack_votes WHERE sticker_id=? AND user_id=?",
-            (sticker_id, user_id),
-        )
-        standing = cur.rowcount == 0
-        if standing:
-            await db.execute(
-                "INSERT INTO pack_votes(sticker_id, user_id) VALUES(?,?)",
-                (sticker_id, user_id),
-            )
-        await db.commit()
-        cur = await db.execute(
-            "SELECT COUNT(*) FROM pack_votes WHERE sticker_id=?", (sticker_id,)
-        )
-        row = await cur.fetchone()
-    return standing, int(row[0]) if row else 0
-
-
-async def count_votes(path: Path, sticker_id: int, *, ttl_days: int) -> int:
-    window = f"-{ttl_days} days"
-    async with connect(path) as db:
-        cur = await db.execute(
-            "SELECT COUNT(*) FROM pack_votes WHERE sticker_id=? "
-            "AND created_at >= datetime('now', ?)",
-            (sticker_id, window),
-        )
-        row = await cur.fetchone()
-    return int(row[0]) if row else 0
-
-
-async def clear_votes(path: Path, sticker_id: int) -> None:
-    """После удаления голоса не нужны — стикер уже ушёл."""
-    async with connect(path) as db:
-        await db.execute("DELETE FROM pack_votes WHERE sticker_id=?", (sticker_id,))
-        await db.commit()
 
 
 async def clear_core(path: Path, sticker_id: int) -> None:

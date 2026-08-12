@@ -153,11 +153,11 @@ async def test_last_sticker_cannot_be_removed(tmp_path):
     assert (await db.get_sticker(settings.db_path, only)).in_pack
 
 
-async def test_foreign_sticker_needs_the_full_vote(tmp_path):
-    """Чужой стикер не убирается в одиночку — сколько бы раз ни нажимать."""
+async def test_foreign_sticker_requires_a_moderator(tmp_path):
+    """Голосования больше нет: чужой стикер убирает автор или модератор клуба."""
     settings = Settings(
         telegram_owner_id=111, state_dir=tmp_path, output_dir=tmp_path / "o",
-        votes_to_remove=3,
+        moderator_usernames="ddumik,IrinaFedyay",
     )
     await db.init_db(settings.db_path)
     theirs = await _add_sticker(settings, user_id=222, phrase="чужая", slug="chuzhaya")
@@ -165,31 +165,45 @@ async def test_foreign_sticker_needs_the_full_vote(tmp_path):
     filler = await _add_sticker(settings, user_id=222, phrase="вторая", slug="vtoraya")
     await db.mark_in_pack(settings.db_path, filler, "🔥", "wndr", "file-y")
 
-    deleted = AsyncMock()
-    bot = SimpleNamespace(delete_sticker_from_set=deleted)
     row = await db.get_sticker(settings.db_path, theirs)
 
-    def voter(uid: int) -> User:
-        return User(id=uid, is_bot=False, first_name=f"U{uid}", username=f"u{uid}")
+    # Обычный участник — только подсказка, кому писать; удаления нет.
+    assert generate._removal_right(row, 333, settings, "random_user") == generate.ASK
+    hint = generate._foreign_removal_hint(settings)
+    assert "@IrinaFedyay" in hint and "@ddumik" in hint
 
-    # Один человек, сколько бы раз ни жал, даёт ровно один голос.
-    await generate._vote_to_remove(bot, settings, row, voter(333))
-    await generate._vote_to_remove(bot, settings, row, voter(333))  # снял
-    await generate._vote_to_remove(bot, settings, row, voter(333))  # поставил снова
-    assert await db.count_votes(settings.db_path, theirs, ttl_days=7) == 1
-    deleted.assert_not_awaited()
-    assert (await db.get_sticker(settings.db_path, theirs)).in_pack
-
-    await generate._vote_to_remove(bot, settings, row, voter(444))
-    deleted.assert_not_awaited()
-
-    # Третий голос добирает порог — стикер уходит.
-    message = await generate._vote_to_remove(bot, settings, row, voter(555))
+    # Модератор узнаётся по нику без учёта регистра и убирает чужой стикер.
+    assert (
+        generate._removal_right(row, 333, settings, "irinafedyay")
+        == generate.MODERATOR
+    )
+    deleted = AsyncMock()
+    bot = SimpleNamespace(delete_sticker_from_set=deleted)
+    ok, message = await generate._drop_from_pack(
+        bot, settings, row, 333, generate.MODERATOR
+    )
+    assert ok
     deleted.assert_awaited_once_with(sticker="file-x")
     assert not (await db.get_sticker(settings.db_path, theirs)).in_pack
     assert "Убрал" in message
-    # Голоса после удаления не нужны.
-    assert await db.count_votes(settings.db_path, theirs, ttl_days=7) == 0
+
+
+async def test_moderator_rights_edges(tmp_path):
+    """Ядро закрыто даже для модераторов; модератор по ID работает без ника."""
+    settings = Settings(
+        telegram_owner_id=111, state_dir=tmp_path, output_dir=tmp_path / "o",
+    )
+    core = db.StickerRow(1, 111, "core", 1, "ядро", "/tmp/c.webp", True, is_core=True)
+    assert generate._removal_right(core, 333, settings, "ddumik") == generate.CORE
+
+    by_id = Settings(
+        telegram_owner_id=111, state_dir=tmp_path, output_dir=tmp_path / "o",
+        moderator_ids="777", moderator_usernames="",
+    )
+    foreign = db.StickerRow(2, 222, "b", 1, "чужая", "/tmp/b.webp", True)
+    assert generate._removal_right(foreign, 777, by_id, None) == generate.MODERATOR
+    # Пустой список ников не превращает всех в модераторов.
+    assert generate._removal_right(foreign, 555, by_id, "someone") == generate.ASK
 
 
 async def test_author_removes_own_without_any_votes(tmp_path):

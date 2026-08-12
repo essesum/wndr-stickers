@@ -36,8 +36,10 @@ from skill.wndr_stickers.src.config import Settings
 log = logging.getLogger(__name__)
 PACK_MUTATION_LOCK = asyncio.Lock()
 
-#: Кто и на каком основании может убрать стикер из пака.
-CORE, AUTHOR, OWNER, VOTE = "core", "author", "owner", "vote"
+#: Кто и на каком основании может убрать стикер из пака. Голосование убрано
+#: (решение Кати, 2026-08-12): чужой стикер убирает автор, владелец или
+#: модератор клуба; остальным бот подсказывает, кому написать.
+CORE, AUTHOR, OWNER, MODERATOR, ASK = "core", "author", "owner", "moderator", "ask"
 
 
 #: id в SQLite — знаковый 64-битный; больше него sqlite3 бросает OverflowError
@@ -97,22 +99,24 @@ def _offer_keyboard(request_id: int) -> InlineKeyboardMarkup:
 
 
 def _pack_list_keyboard(
-    rows: list[db.StickerRow], settings: Settings, user_id: int
+    rows: list[db.StickerRow],
+    settings: Settings,
+    user_id: int,
+    username: str | None = None,
 ) -> InlineKeyboardMarkup | None:
-    """Кнопки ✕ под списком пака — только у того, что человек вправе трогать.
+    """Кнопки ✕ под списком пака — только у того, что человек вправе убрать.
 
-    Кнопка чужого стикера показывает счёт голосов: нажатие — это просьба, а не
-    удаление, и это должно быть видно до нажатия, а не после.
+    У чужих стикеров кнопки нет вовсе: убрать их может лишь автор или
+    модератор, и кнопка, которая ничего не делает, только злила бы.
     """
     buttons: list[list[InlineKeyboardButton]] = []
     for row in rows[:20]:
-        right = _removal_right(row, user_id, settings)
-        if right is CORE:
+        right = _removal_right(row, user_id, settings, username)
+        if right not in (AUTHOR, OWNER, MODERATOR):
             continue
-        label = "✕" if right in (AUTHOR, OWNER) else "🙋 убрать"
         short = row.phrase if len(row.phrase) <= 18 else row.phrase[:17] + "…"
         buttons.append(
-            [InlineKeyboardButton(text=f"{label} {short}", callback_data=f"rm:{row.id}")]
+            [InlineKeyboardButton(text=f"✕ {short}", callback_data=f"rm:{row.id}")]
         )
     return InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
 
@@ -140,7 +144,8 @@ _RIGHT_HINT = {
     CORE: "основа пака",
     AUTHOR: "твой",
     OWNER: "твой пак",
-    VOTE: "чужой",
+    MODERATOR: "модерация",
+    ASK: "чужой",
 }
 
 
@@ -148,6 +153,7 @@ def _delete_hint_chunks(
     rows: list[db.StickerRow],
     settings: Settings,
     user_id: int,
+    username: str | None = None,
     *,
     max_chars: int = 3500,
 ) -> list[str]:
@@ -157,7 +163,7 @@ def _delete_hint_chunks(
     header = "Что в паке. Нажми ✕ под сообщением или отправь строку боту:\n"
     chunks: list[str] = [header]
     for row in rows:
-        right = _removal_right(row, user_id, settings)
+        right = _removal_right(row, user_id, settings, username)
         line = (
             f"<code>удали #{row.id}</code> — {html.escape(row.phrase)}"
             f" <i>({_RIGHT_HINT[right]})</i>\n"
@@ -208,14 +214,20 @@ async def _alert_owner(bot: Bot, settings: Settings, text: str, *, key: str = "c
 
 
 async def _reply_delete_hint(
-    m: Message, rows: list[db.StickerRow], settings: Settings, user_id: int
+    m: Message,
+    rows: list[db.StickerRow],
+    settings: Settings,
+    user_id: int,
+    username: str | None = None,
 ) -> None:
-    chunks = _delete_hint_chunks(rows, settings, user_id)
+    chunks = _delete_hint_chunks(rows, settings, user_id, username)
     for index, chunk in enumerate(chunks):
         last = index == len(chunks) - 1
         await m.reply(
             chunk,
-            reply_markup=_pack_list_keyboard(rows, settings, user_id) if last else None,
+            reply_markup=(
+                _pack_list_keyboard(rows, settings, user_id, username) if last else None
+            ),
         )
 
 
@@ -234,12 +246,14 @@ async def _find_in_pack_by_phrase_or_id(settings: Settings, phrase: str) -> db.S
     return await db.find_in_pack(settings.db_path, phrase)
 
 
-def _removal_right(row: db.StickerRow, user_id: int, settings: Settings) -> str:
+def _removal_right(
+    row: db.StickerRow, user_id: int, settings: Settings, username: str | None = None
+) -> str:
     """Основание для удаления. Порядок проверок и есть политика.
 
-    Владелец может всё. Ядро не трогает никто другой. Свой стикер автор
-    убирает сам — он его сделал, ему и решать. Чужой не убирается в одиночку
-    ни при каких условиях: только просьбой, которую поддержат другие.
+    Владелец может всё. Ядро не трогает никто, кроме владельца, — даже
+    модераторы. Свой стикер автор убирает сам — он его сделал, ему и решать.
+    Чужой убирает модератор клуба; остальным бот подсказывает, кому написать.
     """
     if user_id == settings.telegram_owner_id:
         return OWNER
@@ -247,13 +261,15 @@ def _removal_right(row: db.StickerRow, user_id: int, settings: Settings) -> str:
         return CORE
     if row.user_id == user_id:
         return AUTHOR
-    return VOTE
+    if settings.is_moderator(user_id, username):
+        return MODERATOR
+    return ASK
 
 
 async def _drop_from_pack(
     bot: Bot, settings: Settings, row: db.StickerRow, user_id: int, reason: str
 ) -> tuple[bool, str]:
-    """Физически убрать стикер из набора. Общий путь для автора, владельца и голосования."""
+    """Физически убрать стикер из набора. Общий путь для автора, владельца и модератора."""
     async with PACK_MUTATION_LOCK:
         fresh = await db.get_sticker(settings.db_path, row.id)
         if fresh is None or not fresh.in_pack:
@@ -284,48 +300,35 @@ async def _drop_from_pack(
         await db.log_community_action(
             settings.db_path, row.id, user_id, "removed", reason
         )
-        await db.clear_votes(settings.db_path, row.id)
         await _rebuild_public_zip(settings)
     return True, _removed_message(fresh.phrase)
 
 
-async def _vote_to_remove(
-    bot: Bot, settings: Settings, row: db.StickerRow, user: User
-) -> str:
-    """Попросить убрать чужой стикер. Наберётся достаточно просьб — уйдёт."""
-    standing, votes = await db.toggle_vote(
-        settings.db_path, row.id, user.id, ttl_days=settings.vote_ttl_days
+def _foreign_removal_hint(settings: Settings) -> str:
+    """Куда идти за удалением чужого стикера. Голосования больше нет."""
+    mods = ", ".join(f"@{name}" for name in settings.moderator_mentions)
+    return (
+        "Чужой стикер может убрать только его автор или модераторы клуба"
+        f"{f' ({mods})' if mods else ''}. "
+        f"Хочешь, чтобы стикер убрали, — напиши {settings.moderator_contact}."
     )
-    need = settings.votes_to_remove
-    if not standing:
-        return f"Снял твой голос. Сейчас за удаление: {votes} из {need}."
-    if votes < need:
-        left = need - votes
-        return (
-            f"Записал. За удаление «{html.escape(row.phrase)}»: {votes} из {need}.\n"
-            f"Нужно ещё {left} — чужой стикер в одиночку не убирается."
-        )
-    ok, message = await _drop_from_pack(
-        bot, settings, row, user.id, f"голосование {votes}/{need}"
-    )
-    return message if ok else message
 
 
 async def _remove(m: Message, settings: Settings, phrase: str) -> None:
-    """Убрать стикер из пака по правам: свой — сам, чужой — голосованием."""
+    """Убрать стикер из пака по правам: свой — сам, чужой — через модератора."""
     user = m.from_user
     assert user is not None and m.bot is not None
 
     if not phrase:
         rows = await db.pack_stickers(settings.db_path)
-        await _reply_delete_hint(m, rows, settings, user.id)
+        await _reply_delete_hint(m, rows, settings, user.id, user.username)
         return
 
     row = await _find_in_pack_by_phrase_or_id(settings, phrase)
     if row is None:
         rows = await db.pack_stickers(settings.db_path)
         await m.reply(f"В паке нет «{html.escape(phrase)}».")
-        await _reply_delete_hint(m, rows, settings, user.id)
+        await _reply_delete_hint(m, rows, settings, user.id, user.username)
         return
 
     if not settings.user_allowed(user.id) or not await db.touch_user(
@@ -334,7 +337,7 @@ async def _remove(m: Message, settings: Settings, phrase: str) -> None:
         await m.reply("Доступ закрыт.")
         return
 
-    right = _removal_right(row, user.id, settings)
+    right = _removal_right(row, user.id, settings, user.username)
 
     if right is CORE:
         await m.reply(
@@ -343,8 +346,8 @@ async def _remove(m: Message, settings: Settings, phrase: str) -> None:
         )
         return
 
-    if right is VOTE:
-        await m.reply(await _vote_to_remove(m.bot, settings, row, user))
+    if right is ASK:
+        await m.reply(_foreign_removal_hint(settings))
         return
 
     if right is AUTHOR:
@@ -819,25 +822,27 @@ def build_router(settings: Settings) -> Router:
             await query.answer("Доступ закрыт", show_alert=True)
             return
 
-        right = _removal_right(row, user.id, settings)
+        right = _removal_right(row, user.id, settings, user.username)
         await db.log_ui_event(settings.db_path, f"rm:{right}", user.id)
         if right is CORE:
             await query.answer("Это основа пака — она остаётся", show_alert=True)
             return
 
-        if right is VOTE:
-            await query.answer("Записал твой голос")
-            message = await _vote_to_remove(bot, settings, row, user)
-        else:
-            if right is AUTHOR:
-                used = await db.count_community_actions(
-                    settings.db_path, user_id=user.id, action="removed", hours=24
-                )
-                if used >= settings.rate_removals_per_user_day:
-                    await query.answer("На сегодня хватит удалений", show_alert=True)
-                    return
-            await query.answer("Убираю…")
-            _, message = await _drop_from_pack(bot, settings, row, user.id, right)
+        # Кнопки «🙋 убрать» из сообщений времён голосования всё ещё живут
+        # в чатах — на нажатие отвечаем новой политикой, а не молчанием.
+        if right is ASK:
+            await query.answer(_foreign_removal_hint(settings), show_alert=True)
+            return
+
+        if right is AUTHOR:
+            used = await db.count_community_actions(
+                settings.db_path, user_id=user.id, action="removed", hours=24
+            )
+            if used >= settings.rate_removals_per_user_day:
+                await query.answer("На сегодня хватит удалений", show_alert=True)
+                return
+        await query.answer("Убираю…")
+        _, message = await _drop_from_pack(bot, settings, row, user.id, right)
 
         if isinstance(query.message, Message):
             await query.message.answer(message)
