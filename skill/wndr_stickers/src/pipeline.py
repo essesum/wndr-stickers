@@ -23,8 +23,8 @@ class StickerVerificationError(RuntimeError):
         super().__init__("; ".join(checks.problems) or "WNDR style verification failed")
 
 
-def _verify_or_reject(path: Path) -> verify.VerifyResult:
-    checks = verify.verify_sticker(path, enforce_style=True)
+def _verify_or_reject(path: Path, *, forbid_black: bool = False) -> verify.VerifyResult:
+    checks = verify.verify_sticker(path, enforce_style=True, forbid_black=forbid_black)
     if not checks.ok:
         path.unlink(missing_ok=True)
         raise StickerVerificationError(checks)
@@ -45,6 +45,7 @@ class StickerResult:
     lines: list[str]
     checks: verify.VerifyResult
     seconds: float
+    mode: str = ""
 
     @property
     def ok(self) -> bool:
@@ -63,14 +64,20 @@ def make_sticker(
     started = time.monotonic()
     rng = rng or random.Random()
 
+    # Режим стиля выбирается на каждый стикер: «classic» — сдержанный первый
+    # стиль пака, «expressive» — нарядный v0.2 с оттенками и картинками.
+    mode = style.pick_mode(rng)
+
     shape = style.shape_by_key(shape_key) if shape_key else None
     if shape is None:
         shape = style.pick_shape(allow_arrows=settings.allow_arrow_shapes, rng=rng)
-    combo = style.pick_combo(rng)
     # Плотность и мотив выбираются на каждый стикер. Без этого пак получался
     # одинаковым: сперва все плашки были голые, потом все — нарядные.
-    density = style.pick_density(rng)
-    motif = motif or style.pick_motif(rng)
+    density = style.pick_density(rng, keys=mode.density_keys)
+    motif = motif or style.pick_motif(rng, chance=mode.motif_chance)
+    # Правило «розы — без чёрного»: срабатывает и на мотив, и на wreath-форму.
+    roses = style.mentions_roses(shape.prompt, motif)
+    combo = style.pick_combo(rng, keys=mode.combo_keys, no_black=roses)
 
     prompt = style.build_plate_prompt(
         shape=shape,
@@ -92,20 +99,29 @@ def make_sticker(
     area = plate.safe_text_area(sticker)
     background = plate.dominant_color(sticker, area)
     lettered, layout = typeset.typeset(
-        sticker, phrase, area, str(settings.font_path), background, rng=rng
+        sticker,
+        phrase,
+        area,
+        str(settings.font_path),
+        background,
+        # В classic-режиме rng не передаётся: типографика прежняя,
+        # детерминированная — без автоакцента и росчерка.
+        rng=rng if mode.typographic_spread else None,
+        forbid_black=roses,
     )
 
     canvas = cutout.telegram_canvas(lettered)
     destination = cutout.save_webp(canvas, settings.stickers_dir / filename)
 
-    checks = _verify_or_reject(destination)
+    checks = _verify_or_reject(destination, forbid_black=roses)
     log.info(
-        "стикер %s готов за %.1fс (%s/%s, форма %s)%s",
+        "стикер %s готов за %.1fс (%s/%s, форма %s, режим %s)%s",
         filename,
         time.monotonic() - started,
         generated.provider,
         generated.model,
         shape.key,
+        mode.key,
         "" if checks.ok else f"; замечания: {checks.problems}",
     )
 
@@ -122,6 +138,7 @@ def make_sticker(
         lines=[" ".join(w.text for w in line) for line in layout.lines],
         checks=checks,
         seconds=time.monotonic() - started,
+        mode=mode.key,
     )
 
 
@@ -133,6 +150,7 @@ def make_illustration(
 ) -> StickerResult:
     """Стикер без текста: розы, коты, хинкали, костёр."""
     started = time.monotonic()
+    roses = style.mentions_roses(motif)
     prompt = style.build_illustration_prompt(
         motif=motif, allow_arrows=settings.allow_arrow_shapes
     )
@@ -158,8 +176,9 @@ def make_illustration(
         raw_path=raw_path,
         font_size=0,
         lines=[],
-        checks=_verify_or_reject(destination),
+        checks=_verify_or_reject(destination, forbid_black=roses),
         seconds=time.monotonic() - started,
+        mode="illustration",
     )
 
 

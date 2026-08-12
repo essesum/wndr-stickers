@@ -119,19 +119,35 @@ def _nearest_base_color(background: tuple[int, int, int]) -> tuple[int, int, int
     )
 
 
-def pick_text_color(background: tuple[int, int, int]) -> tuple[int, int, int]:
-    """Canonical pairing from the official guide, not a generic contrast guess."""
+def pick_text_color(
+    background: tuple[int, int, int], *, forbid_black: bool = False
+) -> tuple[int, int, int]:
+    """Canonical pairing from the official guide, not a generic contrast guess.
+
+    При forbid_black (розы в дизайне) роль тёмного текста играет ржавый.
+    """
     nearest = _nearest_base_color(background)
-    return CREAM if nearest in _DARK_FILLS else BLACK
+    if nearest in _DARK_FILLS:
+        return CREAM
+    return RUST if forbid_black else BLACK
 
 
 def pick_accent_color(
-    background: tuple[int, int, int], text_color: tuple[int, int, int]
+    background: tuple[int, int, int],
+    text_color: tuple[int, int, int],
+    *,
+    forbid_black: bool = False,
 ) -> tuple[int, int, int]:
     """Orange accent on black/cream/sand; black accent on orange-family plates."""
     nearest = _nearest_base_color(background)
     accent = BLACK if nearest in (ACCENT, RUST, TERRACOTTA) else ACCENT
-    return accent if accent != text_color else (BLACK if text_color != BLACK else CREAM)
+    if accent == text_color:
+        accent = BLACK if text_color != BLACK else CREAM
+    if forbid_black and accent == BLACK:
+        # Ржавый вместо чёрного, но не на ржавой плашке и не цветом текста —
+        # там тёмный акцент берёт на себя оранжевый.
+        accent = RUST if text_color != RUST and nearest != RUST else ACCENT
+    return accent
 
 
 def _split_into_lines(words: list[Word], line_count: int) -> list[list[Word]]:
@@ -301,12 +317,14 @@ def typeset(
     *,
     max_lines: int = MAX_LINES,
     rng: random.Random | None = None,
+    forbid_black: bool = False,
 ) -> tuple[Image.Image, Layout]:
     """Полный проход: разбор акцентов -> подбор кегля -> отрисовка.
 
     С rng включается типографический разброс: автоакцент и росчерк. Без rng
     поведение прежнее и полностью детерминированное — на этом держатся тесты
-    и rebuild существующих стикеров.
+    и rebuild существующих стикеров. forbid_black — правило «розы без чёрного»:
+    чёрный текст и чёрный акцент заменяются ржавым/оранжевым.
     """
     _, words = parse_accents(phrase)
     if rng is not None:
@@ -314,8 +332,8 @@ def typeset(
     layout = fit_text(words, rect, font_path, max_lines=max_lines)
     if layout is None:
         raise ValueError(f"Текст не помещается в область {rect.as_tuple()}")
-    text_color = pick_text_color(background)
-    accent_color = pick_accent_color(background, text_color)
+    text_color = pick_text_color(background, forbid_black=forbid_black)
+    accent_color = pick_accent_color(background, text_color, forbid_black=forbid_black)
     has_accent = any(w.accent for line in layout.lines for w in line)
     underline = rng is not None and has_accent and rng.random() < FLOURISH_CHANCE
     rendered = render(

@@ -8,6 +8,7 @@ later by code.
 from __future__ import annotations
 
 import random
+import re
 from dataclasses import dataclass
 
 # --- Palette -----------------------------------------------------------------
@@ -159,9 +160,12 @@ DENSITIES: tuple[Density, ...] = (
 )
 
 
-def pick_density(rng: random.Random | None = None) -> Density:
+def pick_density(
+    rng: random.Random | None = None, *, keys: tuple[str, ...] | None = None
+) -> Density:
     rng = rng or random.Random()
-    return rng.choices(DENSITIES, weights=[d.weight for d in DENSITIES], k=1)[0]
+    pool = [d for d in DENSITIES if keys is None or d.key in keys]
+    return rng.choices(pool, weights=[d.weight for d in pool], k=1)[0]
 
 
 def density_by_key(key: str) -> Density | None:
@@ -191,9 +195,11 @@ MOTIFS: tuple[str, ...] = (
 MOTIF_CHANCE = 0.45
 
 
-def pick_motif(rng: random.Random | None = None) -> str | None:
+def pick_motif(
+    rng: random.Random | None = None, *, chance: float = MOTIF_CHANCE
+) -> str | None:
     rng = rng or random.Random()
-    if rng.random() >= MOTIF_CHANCE:
+    if rng.random() >= chance:
         return None
     return rng.choice(list(MOTIFS))
 
@@ -202,6 +208,31 @@ def pick_placement(rng: random.Random | None = None) -> str:
     """Куда прижать мотив. Всегда «bottom» — своя монотонность, как с плотностью."""
     rng = rng or random.Random()
     return rng.choice(("top", "bottom"))
+
+
+# --- Розы без чёрного --------------------------------------------------------
+# Правило Кати (2026-08-12): если в дизайне есть розы, чёрный не используется
+# нигде — ни в заливке, ни в линовке, ни в тексте. Тёмную работу берёт на себя
+# ржавый #992D0E. Чёрный фон холста не считается: это технический слой, который
+# срезается при вырубке. Правило срабатывает и на мотив с розами, и на
+# wreath-форму (в её рамке гравированные розы), и на «без текста розы».
+_ROSE_RE = re.compile(
+    r"\broses?\b|\bроз(?:а|ы|е|у|ой|ам|ах|ами|очк\w*)?\b",
+    re.IGNORECASE,
+)
+
+
+def mentions_roses(*texts: str | None) -> bool:
+    """Есть ли розы в любом из текстов (промпт формы, мотив, фраза)."""
+    return any(_ROSE_RE.search(t) for t in texts if t)
+
+
+ROSE_NO_BLACK_CLAUSE = """\
+This design features roses, so near-black #0D0D0D is FORBIDDEN anywhere inside \
+the sticker: no black fills, no black linework, no black ornament. Draw every \
+dark tone and all engraved linework in deep rust #992D0E instead. Only the \
+technical pure-black canvas background outside the sticker stays black.\
+"""
 
 
 # --- Colour pairings ---------------------------------------------------------
@@ -217,9 +248,64 @@ COMBOS = (
 )
 
 
-def pick_combo(rng: random.Random | None = None) -> dict:
+def pick_combo(
+    rng: random.Random | None = None,
+    *,
+    keys: tuple[str, ...] | None = None,
+    no_black: bool = False,
+) -> dict:
     rng = rng or random.Random()
-    return rng.choices(list(COMBOS), weights=[c["weight"] for c in COMBOS], k=1)[0]
+    pool = [c for c in COMBOS if keys is None or c["key"] in keys]
+    if no_black:
+        # Розы: чёрной заливке не бывать. Текстовый цвет здесь не фильтруем —
+        # его выбирает typeset и при no_black сам заменяет чёрный на ржавый.
+        pool = [c for c in pool if "#0D0D0D" not in c["fill"]]
+    return rng.choices(pool, weights=[c["weight"] for c in pool], k=1)[0]
+
+
+# --- Style modes -------------------------------------------------------------
+# Два характера пака (решение Кати, 2026-08-12): «classic» — сдержанный первый
+# стиль (базовая тройка, спокойная плашка, ровный центр без автоакцента),
+# «expressive» — нарядный v0.2 с оттенками, мотивами-картинками и
+# типографическими вольностями. Чередуются случайно: пак не скатывается
+# ни в монотонную строгость, ни в сплошной карнавал, и нажимать хочется ещё.
+@dataclass(frozen=True)
+class Mode:
+    key: str
+    combo_keys: tuple[str, ...] | None  # None — все COMBOS со своими весами
+    density_keys: tuple[str, ...] | None  # None — все DENSITIES
+    motif_chance: float
+    typographic_spread: bool  # автоакцент и росчерк
+    weight: int
+
+
+MODES: tuple[Mode, ...] = (
+    Mode(
+        "classic",
+        combo_keys=("black-plate", "accent-plate", "cream-plate"),
+        density_keys=("bare", "framed"),
+        motif_chance=0.0,
+        typographic_spread=False,
+        weight=2,
+    ),
+    Mode(
+        "expressive",
+        combo_keys=None,
+        density_keys=None,
+        motif_chance=MOTIF_CHANCE,
+        typographic_spread=True,
+        weight=3,
+    ),
+)
+
+
+def pick_mode(rng: random.Random | None = None) -> Mode:
+    rng = rng or random.Random()
+    return rng.choices(list(MODES), weights=[m.weight for m in MODES], k=1)[0]
+
+
+def mode_by_key(key: str) -> Mode | None:
+    return next((m for m in MODES if m.key == key), None)
 
 
 # --- Bans --------------------------------------------------------------------
@@ -271,8 +357,8 @@ for automatic cut-out.
 ILLUSTRATION_CLAUSE = """\
 Add ONE very simple, almost iconic illustrative element ({motif}) tucked into the \
 {placement} edge of the plate only. Draw it as a vintage engraving / botanical \
-illustration with heavy black linework and flat fills. It must not enter the clean \
-central area.\
+illustration with heavy {linework} linework and flat fills. It must not enter the \
+clean central area.\
 """
 
 #: Оставлено для совместимости: раньше это был единственный вариант оформления и
@@ -283,8 +369,8 @@ ILLUSTRATION_PROMPT = """\
 Using the attached WNDR sheet as a STRICT style reference, draw ONE die-cut \
 illustration sticker of {motif}, centred, on a plain solid pure-black background.
 
-Vintage botanical/engraving illustration style with heavy black linework and flat \
-colour fills. A thick warm cream-white die-cut outline (#F7F3EA) runs around the \
+Vintage botanical/engraving illustration style with heavy {linework} linework and \
+flat colour fills. A thick warm cream-white die-cut outline (#F7F3EA) runs around the \
 whole outer contour and should read as 8-12 px at 512 px.
 Palette strictly and only: burnt orange #CC3D11, near-black #0D0D0D, cream \
 #F2E2C8, off-white #F7F3EA, with supporting shades deep rust #992D0E, soft \
@@ -312,9 +398,15 @@ def build_plate_prompt(
     и внутри богатой рамки. Это и даёт разброс, ради которого всё затевалось.
     """
     _ = allow_arrows  # Backward-compatible argument; arrows are canonical in v0.1.
+    roses = mentions_roses(shape.prompt, motif)
+    linework = "deep rust #992D0E" if roses else "black"
     parts = [(density or DENSITIES[0]).clause]
     if motif:
-        parts.append(ILLUSTRATION_CLAUSE.format(motif=motif, placement=placement))
+        parts.append(
+            ILLUSTRATION_CLAUSE.format(motif=motif, placement=placement, linework=linework)
+        )
+    if roses:
+        parts.append(ROSE_NO_BLACK_CLAUSE)
     illustration = "\n\n".join(parts)
     return PLATE_PROMPT.format(
         shape_prompt=shape.prompt,
@@ -328,7 +420,12 @@ def build_plate_prompt(
 def build_illustration_prompt(*, motif: str, allow_arrows: bool = True) -> str:
     """Prompt for a textless illustration sticker (roses, cats, khinkali…)."""
     _ = allow_arrows  # Backward-compatible argument; no canonical blanket arrow ban.
-    return ILLUSTRATION_PROMPT.format(
+    roses = mentions_roses(motif)
+    prompt = ILLUSTRATION_PROMPT.format(
         motif=motif,
         negative=NEGATIVE,
+        linework="deep rust #992D0E" if roses else "black",
     )
+    if roses:
+        prompt += "\n" + ROSE_NO_BLACK_CLAUSE
+    return prompt

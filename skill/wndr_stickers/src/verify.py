@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from .style import FULL_PALETTE
+from .style import BLACK, FULL_PALETTE
 
 MAX_BYTES = 512 * 1024
 REQUIRED_SIZE = (512, 512)
@@ -58,6 +58,8 @@ def verify_sticker(
     enforce_style: bool = False,
     palette_tolerance: int = 48,
     min_palette_fraction: float = 0.85,
+    forbid_black: bool = False,
+    max_black_fraction: float = 0.05,
 ) -> VerifyResult:
     problems: list[str] = []
     if not path.exists():
@@ -95,18 +97,33 @@ def verify_sticker(
         problems.append("стикер касается краёв холста")
 
     palette_fraction = None
-    if enforce_style:
+    if enforce_style or forbid_black:
         rgba = np.asarray(image, dtype=np.uint8)
         opaque_pixels = rgba[rgba[:, :, 3] > 16][:, :3]
         if len(opaque_pixels):
-            distance = _palette_distance(opaque_pixels)
-            palette_fraction = float((distance <= palette_tolerance).mean())
-            if palette_fraction < min_palette_fraction:
-                problems.append(
-                    "палитра вне WNDR-контракта: "
-                    f"{palette_fraction:.1%} канонических пикселей, "
-                    f"нужно минимум {min_palette_fraction:.0%}"
+            if enforce_style:
+                distance = _palette_distance(opaque_pixels)
+                palette_fraction = float((distance <= palette_tolerance).mean())
+                if palette_fraction < min_palette_fraction:
+                    problems.append(
+                        "палитра вне WNDR-контракта: "
+                        f"{palette_fraction:.1%} канонических пикселей, "
+                        f"нужно минимум {min_palette_fraction:.0%}"
+                    )
+            if forbid_black:
+                # Правило «розы — без чёрного»: небольшой допуск оставлен на
+                # сглаживание краёв, но чёрная заливка или линовка не пройдёт.
+                black = np.array(BLACK, dtype=np.float64)
+                black_distance = np.linalg.norm(
+                    opaque_pixels.astype(np.float64) - black, axis=1
                 )
+                black_fraction = float((black_distance <= palette_tolerance).mean())
+                if black_fraction > max_black_fraction:
+                    problems.append(
+                        "розы без чёрного: "
+                        f"{black_fraction:.1%} пикселей около #0D0D0D, "
+                        f"допущено максимум {max_black_fraction:.0%}"
+                    )
 
     return VerifyResult(
         ok=not problems,
