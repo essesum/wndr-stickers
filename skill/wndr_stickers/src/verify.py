@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from .style import ACCENT, BLACK, CREAM, NEAR_WHITE
+from .style import FULL_PALETTE
 
 MAX_BYTES = 512 * 1024
 REQUIRED_SIZE = (512, 512)
@@ -23,7 +23,7 @@ def _palette_distance(pixels: np.ndarray) -> np.ndarray:
     так и было: чем наряднее плашка, тем больше у неё краёв и тем вернее она
     проваливала приёмку, хотя палитру никто не нарушал.
     """
-    palette = np.array([ACCENT, BLACK, CREAM, NEAR_WHITE], dtype=np.float64)
+    palette = np.array(FULL_PALETTE, dtype=np.float64)
     points = pixels.astype(np.float64)
 
     best = np.linalg.norm(points[:, None, :] - palette[None, :, :], axis=2).min(axis=1)

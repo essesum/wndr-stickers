@@ -84,6 +84,18 @@ def _redo_keyboard(request_id: int, label: str) -> InlineKeyboardMarkup:
     )
 
 
+def _offer_keyboard(request_id: int) -> InlineKeyboardMarkup:
+    """Выбор для фразы-картинки. В callback_data — id заявки: фраза не влезает."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🖼 Без текста", callback_data=f"illu:{request_id}"),
+                InlineKeyboardButton(text="🔤 С текстом", callback_data=f"text:{request_id}"),
+            ]
+        ]
+    )
+
+
 def _pack_list_keyboard(
     rows: list[db.StickerRow], settings: Settings, user_id: int
 ) -> InlineKeyboardMarkup | None:
@@ -425,6 +437,11 @@ async def _add_row_to_pack(
         return True, f"Добавил «{html.escape(fresh.phrase)}» в общий пак:\n{link}"
 
 
+#: Префикс, под которым стикеры-картинки живут в БД. По нему повтор («ещё
+#: вариант», «попробовать ещё раз») понимает, что рисовать надо снова картинку.
+ILLUSTRATION_LABEL = "без текста "
+
+
 async def _produce(
     m: Message,
     settings: Settings,
@@ -433,15 +450,20 @@ async def _produce(
     force: bool = False,
     requester: User | None = None,
     semaphore: asyncio.Semaphore | None = None,
+    illustration: bool = False,
 ) -> None:
     """Сделать один стикер и отдать его в чат.
 
     `requester` нужен для кнопок: сообщение под ними принадлежит боту, поэтому
     `m.from_user` — это сам бот. Без явного автора квоты и авторство писались бы
     на бота, а не на человека, который нажал кнопку.
+
+    При `illustration=True` `phrase` — это описание картинки, а не надпись:
+    рисуется стикер без текста, в БД он живёт под ярлыком «без текста …».
     """
     user = requester or m.from_user
     assert user is not None
+    label = f"{ILLUSTRATION_LABEL}{phrase}" if illustration else phrase
 
     if not settings.user_allowed(user.id):
         await m.answer("Бот сейчас работает по списку. Напиши Кате, чтобы тебя добавили.")
@@ -455,10 +477,10 @@ async def _produce(
     # это разные сценарии, и по ним по-разному читается,живёт ли бот в клубе.
     chat_type = m.chat.type if m.chat else None
 
-    verdict = phrase_moderation.check_phrase(phrase)
+    verdict = phrase_moderation.check_phrase(label)
     if not verdict:
         await db.log_request(
-            settings.db_path, user.id, phrase, "rejected", verdict.reason,
+            settings.db_path, user.id, label, "rejected", verdict.reason,
             chat_type=chat_type,
         )
         await m.answer(verdict.reason)
@@ -467,13 +489,13 @@ async def _produce(
     # Проверяем повтор ДО генерации: так не тратим вызов модели на то,
     # что в паке уже есть. Память сообщества недоступна — просто идём дальше.
     if settings.duplicate_check:
-        similar = await community_memory.find_similar(settings.db_path, phrase)
+        similar = await community_memory.find_similar(settings.db_path, label)
         hit = community_memory.decide_duplicate(
             similar, threshold=settings.duplicate_threshold
         )
         if hit is not None and not force:
             rejected_id = await db.log_request(
-                settings.db_path, user.id, phrase, "rejected", "duplicate",
+                settings.db_path, user.id, label, "rejected", "duplicate",
                 chat_type=chat_type,
             )
             await m.answer(
@@ -484,7 +506,7 @@ async def _produce(
             return
 
     allowance = await ratelimit.reserve(
-        settings.db_path, settings, user.id, phrase, chat_type=chat_type
+        settings.db_path, settings, user.id, label, chat_type=chat_type
     )
     if not allowance or allowance.request_id is None:
         await m.answer(allowance.reason)
@@ -492,12 +514,18 @@ async def _produce(
     request_id = allowance.request_id
 
     notice = await m.answer(voice.waiting())
+
+    def _run():
+        if illustration:
+            return pipeline.make_illustration(phrase, settings)
+        return pipeline.make_sticker(phrase, settings)
+
     try:
         if semaphore is None:
-            result = await asyncio.to_thread(pipeline.make_sticker, phrase, settings)
+            result = await asyncio.to_thread(_run)
         else:
             async with semaphore:
-                result = await asyncio.to_thread(pipeline.make_sticker, phrase, settings)
+                result = await asyncio.to_thread(_run)
     except imagegen.ImageGenerationError as exc:
         await db.update_request(settings.db_path, request_id, "failed", str(exc)[:500])
         log.error("генерация не удалась: %s", exc)
@@ -554,6 +582,44 @@ async def _produce(
         FSInputFile(result.path),
         caption=caption,
         reply_markup=_keyboard(sticker_id),
+    )
+
+
+async def _produce_illustration(
+    m: Message,
+    settings: Settings,
+    motif: str,
+    *,
+    force: bool = False,
+    requester: User | None = None,
+    semaphore: asyncio.Semaphore | None = None,
+) -> None:
+    """Стикер-картинка без надписи. Квоты, дубли и стиль-гейт — общие."""
+    await _produce(
+        m, settings, motif,
+        force=force, requester=requester, semaphore=semaphore, illustration=True,
+    )
+
+
+async def _dispatch_produce(
+    m: Message,
+    settings: Settings,
+    phrase: str,
+    *,
+    force: bool = False,
+    requester: User | None = None,
+    semaphore: asyncio.Semaphore | None = None,
+) -> None:
+    """Повтор по фразе из БД: ярлык «без текста …» обязан снова дать картинку,
+    а не стикер со словами «без текста» поперёк плашки."""
+    if phrase.startswith(ILLUSTRATION_LABEL):
+        await _produce_illustration(
+            m, settings, phrase[len(ILLUSTRATION_LABEL):].strip(),
+            force=force, requester=requester, semaphore=semaphore,
+        )
+        return
+    await _produce(
+        m, settings, phrase, force=force, requester=requester, semaphore=semaphore
     )
 
 
@@ -620,9 +686,34 @@ def build_router(settings: Settings) -> Router:
             )
             return
 
+        if got.action is intent.Action.ILLUSTRATE:
+            if not got.phrase:
+                await m.reply("Скажи, что нарисовать: например «без текста костёр».")
+                return
+            await _produce_illustration(
+                m, settings, got.phrase, force=got.force, semaphore=generation_slots
+            )
+            return
+
         if not got.phrase:
             await m.reply("Напиши фразу — верну стикер.")
             return
+
+        # Фраза похожа на описание картинки — предлагаем выбор, а не решаем
+        # за человека. «!» пропускает вопрос и рисует как обычно.
+        author = getattr(m, "from_user", None)
+        if not got.force and intent.suggest_textless(got.phrase) and author is not None:
+            offer_id = await db.log_request(
+                settings.db_path, author.id, got.phrase, "offered",
+                "похоже на картинку", chat_type=m.chat.type if m.chat else None,
+            )
+            await m.reply(
+                f"«{html.escape(got.phrase)}» может быть и картинкой без слов. "
+                "Как сделать?",
+                reply_markup=_offer_keyboard(offer_id),
+            )
+            return
+
         await _produce(
             m, settings, got.phrase, force=got.force, semaphore=generation_slots
         )
@@ -642,7 +733,7 @@ def build_router(settings: Settings) -> Router:
         # force=True: кнопка и означает «сделай ещё один». Без этого проверка
         # дублей отбивала собственную же кнопку — первое, что видит человек,
         # нажавший «Ещё вариант», это отказ «похожее уже есть».
-        await _produce(
+        await _dispatch_produce(
             query.message,
             settings,
             row.phrase,
@@ -666,6 +757,42 @@ def build_router(settings: Settings) -> Router:
         await query.answer("Делаю")
         # force=True: человек уже увидел отказ и нажал осознанно — отбивать его
         # той же проверкой дублей во второй раз было бы издевательством.
+        await _dispatch_produce(
+            query.message, settings, phrase,
+            force=True, requester=query.from_user, semaphore=generation_slots,
+        )
+
+    @router.callback_query(F.data.startswith("illu:"))
+    async def _offer_illustration(query: CallbackQuery) -> None:
+        """«Без текста» из предложения бота: фраза становится описанием картинки."""
+        request_id = _callback_sticker_id(query.data)
+        if request_id is None:
+            await query.answer("Кнопка испорчена")
+            return
+        phrase = await db.get_request_phrase(settings.db_path, request_id)
+        if not phrase or not isinstance(query.message, Message):
+            await query.answer("Фраза потерялась")
+            return
+        await db.log_ui_event(settings.db_path, "offer:illustration", query.from_user.id)
+        await query.answer("Рисую картинку")
+        await _produce_illustration(
+            query.message, settings, phrase,
+            force=True, requester=query.from_user, semaphore=generation_slots,
+        )
+
+    @router.callback_query(F.data.startswith("text:"))
+    async def _offer_text(query: CallbackQuery) -> None:
+        """«С текстом» из предложения бота — обычный путь, вопрос закрыт."""
+        request_id = _callback_sticker_id(query.data)
+        if request_id is None:
+            await query.answer("Кнопка испорчена")
+            return
+        phrase = await db.get_request_phrase(settings.db_path, request_id)
+        if not phrase or not isinstance(query.message, Message):
+            await query.answer("Фраза потерялась")
+            return
+        await db.log_ui_event(settings.db_path, "offer:text", query.from_user.id)
+        await query.answer("Делаю с текстом")
         await _produce(
             query.message, settings, phrase,
             force=True, requester=query.from_user, semaphore=generation_slots,

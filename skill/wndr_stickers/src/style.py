@@ -18,6 +18,19 @@ NEAR_WHITE = (0xF7, 0xF3, 0xEA)  # #F7F3EA, outer die-cut outline
 
 PALETTE = {"accent": ACCENT, "black": BLACK, "cream": CREAM, "near_white": NEAR_WHITE}
 
+# --- Оттенки v0.2 (решение Кати, 2026-08-12) ---------------------------------
+# Базовая тройка остаётся канонической основой, но на одной тройке пак выходил
+# зажатым. Каждый базовый цвет получил по родственному тону; оттенки выпадают
+# заметно реже базы (веса в COMBOS), иначе основа перестала бы читаться.
+RUST = (0x99, 0x2D, 0x0E)        # #992D0E, тёмно-ржавый — тень рыжего
+TERRACOTTA = (0xE0, 0x76, 0x4A)  # #E0764A, светлая терракота — свет рыжего
+SAND = (0xD9, 0xBE, 0x93)        # #D9BE93, тёплый песочный — тень бежевого
+
+SHADES = {"rust": RUST, "terracotta": TERRACOTTA, "sand": SAND}
+
+#: Всё, что приёмка считает «своим» цветом, включая оттенки.
+FULL_PALETTE = (ACCENT, BLACK, CREAM, NEAR_WHITE, RUST, TERRACOTTA, SAND)
+
 # Colours that may be used by code-rendered text.
 TEXT_COLORS = (ACCENT, BLACK, CREAM, NEAR_WHITE)
 
@@ -175,7 +188,7 @@ MOTIFS: tuple[str, ...] = (
 
 #: Насколько часто внутри стикера появляется картинка. Не всегда: в референсе
 #: иллюстрированных примерно каждый третий, остальные держатся на типографике.
-MOTIF_CHANCE = 0.35
+MOTIF_CHANCE = 0.45
 
 
 def pick_motif(rng: random.Random | None = None) -> str | None:
@@ -185,19 +198,28 @@ def pick_motif(rng: random.Random | None = None) -> str | None:
     return rng.choice(list(MOTIFS))
 
 
+def pick_placement(rng: random.Random | None = None) -> str:
+    """Куда прижать мотив. Всегда «bottom» — своя монотонность, как с плотностью."""
+    rng = rng or random.Random()
+    return rng.choice(("top", "bottom"))
+
+
 # --- Colour pairings ---------------------------------------------------------
 # Exactly two base colours per plate. A third colour appears only as the later
 # code-rendered accent on 1-3 words.
 COMBOS = (
-    {"key": "black-plate", "fill": "near-black #0D0D0D", "text": "cream #F2E2C8"},
-    {"key": "accent-plate", "fill": "burnt orange #CC3D11", "text": "cream #F2E2C8"},
-    {"key": "cream-plate", "fill": "cream #F2E2C8", "text": "near-black #0D0D0D"},
+    {"key": "black-plate", "fill": "near-black #0D0D0D", "text": "cream #F2E2C8", "weight": 3},
+    {"key": "accent-plate", "fill": "burnt orange #CC3D11", "text": "cream #F2E2C8", "weight": 3},
+    {"key": "cream-plate", "fill": "cream #F2E2C8", "text": "near-black #0D0D0D", "weight": 3},
+    {"key": "rust-plate", "fill": "deep rust #992D0E", "text": "cream #F2E2C8", "weight": 1},
+    {"key": "terracotta-plate", "fill": "soft terracotta #E0764A", "text": "near-black #0D0D0D", "weight": 1},
+    {"key": "sand-plate", "fill": "warm sand #D9BE93", "text": "near-black #0D0D0D", "weight": 1},
 )
 
 
 def pick_combo(rng: random.Random | None = None) -> dict:
     rng = rng or random.Random()
-    return rng.choice(list(COMBOS))
+    return rng.choices(list(COMBOS), weights=[c["weight"] for c in COMBOS], k=1)[0]
 
 
 # --- Bans --------------------------------------------------------------------
@@ -208,8 +230,9 @@ NEGATIVE = (
     "NO text, NO letters, NO typography, NO numbers, NO captions, "
     "NO watermark, NO signature. "
     "No gradients, no 3D, no gloss, no drop shadows, no photorealism/photo. "
-    "No more than three colours in the design itself, not counting the "
-    "cream die-cut outline. No non-black background outside the sticker."
+    "No colours outside the approved WNDR palette and its listed shades; at most "
+    "four palette colours in one design, not counting the cream die-cut outline. "
+    "No non-black background outside the sticker."
 )
 
 
@@ -223,9 +246,10 @@ Plate fill: {fill}. A warm cream-white outer die-cut outline (#F7F3EA) runs arou
 the whole contour and should read as 8-12 px at 512 px, with a thin contrasting \
 inner keyline echoing the contour a few pixels inside it.
 Palette strictly and only: burnt orange #CC3D11, near-black #0D0D0D, cream \
-#F2E2C8, plus the off-white die-cut outline #F7F3EA. The three design colours \
-may all appear together in the frame and ornament; the flat central fill stays \
-a single colour.
+#F2E2C8, with supporting shades — deep rust #992D0E, soft terracotta #E0764A, \
+warm sand #D9BE93 — used sparingly, plus the off-white die-cut outline #F7F3EA. \
+The design colours may appear together in the frame and ornament; the flat \
+central fill stays a single colour.
 Flat retro 1970s signage / silkscreen look, in the spirit of an ornate vintage \
 label: the border and frame are richly decorated, the centre is calm.
 
@@ -263,7 +287,8 @@ Vintage botanical/engraving illustration style with heavy black linework and fla
 colour fills. A thick warm cream-white die-cut outline (#F7F3EA) runs around the \
 whole outer contour and should read as 8-12 px at 512 px.
 Palette strictly and only: burnt orange #CC3D11, near-black #0D0D0D, cream \
-#F2E2C8, off-white #F7F3EA.
+#F2E2C8, off-white #F7F3EA, with supporting shades deep rust #992D0E, soft \
+terracotta #E0764A and warm sand #D9BE93 used sparingly.
 
 The black background must touch all four corners of the canvas and must be clearly \
 separated from any black inside the design by the cream outline.

@@ -76,6 +76,7 @@ def make_sticker(
         shape=shape,
         combo=combo,
         motif=motif,
+        placement=style.pick_placement(rng),
         density=density,
         allow_arrows=settings.allow_arrow_shapes,
     )
@@ -91,7 +92,7 @@ def make_sticker(
     area = plate.safe_text_area(sticker)
     background = plate.dominant_color(sticker, area)
     lettered, layout = typeset.typeset(
-        sticker, phrase, area, str(settings.font_path), background
+        sticker, phrase, area, str(settings.font_path), background, rng=rng
     )
 
     canvas = cutout.telegram_canvas(lettered)
@@ -148,7 +149,9 @@ def make_illustration(
         path=destination,
         slug=slug,
         version=version,
-        phrase="",
+        # Ярлык, а не надпись: на самом стикере текста нет, но списку пака,
+        # кнопке «ещё вариант» и проверке дублей нужно чем-то его называть.
+        phrase=f"без текста {motif}",
         provider=generated.provider,
         model=generated.model,
         shape="illustration",

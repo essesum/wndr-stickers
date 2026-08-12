@@ -29,6 +29,34 @@ _LIST_PHRASES = (
 
 _SCOPE_RE = re.compile(r"^\s*(?:из|в)\s+(?:стикер)?пак\w*\s*", re.IGNORECASE)
 
+#: Просьба нарисовать картинку без надписи. Проверяется только в начале текста
+#: (или сразу после глагола рисования): «без текста» в середине фразы — это
+#: часть фразы, а не команда.
+_TEXTLESS_PREFIXES = (
+    "без текста",
+    "без надписи",
+    "без слов",
+    "картинку",
+    "картинка",
+    "иллюстрацию",
+    "иллюстрация",
+)
+
+#: Существительные-картинки для подсказки «а может, без текста?». Список
+#: намеренно тупой словарь, а не угадывание: не совпало — бот просто рисует
+#: обычный стикер, ничего не ломается.
+_VISUAL_WORDS = frozenset(
+    "роза розы кот кота котик котика кошка сердце сердечко солнце луна месяц "
+    "звезда звезды звёзды костер костёр огонь пламя цветок цветы ромашка "
+    "гора горы молния глаз комета хинкали пельмень пельмени булка хлеб компас "
+    "спичка спички чай кофе чашка книга свеча волна море птица бабочка гриб "
+    "грибы ключ корона короне якорь ракета планета радуга кактус арбуз лимон "
+    "вишня клубника рука ладонь крыло череп кристалл зеркало колокол подкова "
+    "клевер перо лист дерево ёлка елка снежинка облако дождь зонт шляпа очки "
+    "часы лампа лампочка змея тигр лев медведь волк лиса сова орёл орел кит "
+    "рыба дельфин маяк корабль лодка велосипед".split()
+)
+
 _HELP_RE = re.compile(
     r"^(?:"
     r"что\s+(?:ты\s+)?(?:умеешь|можешь|делаешь)"
@@ -46,6 +74,8 @@ _HELP_RE = re.compile(
 
 class Action(Enum):
     DRAW = "draw"
+    #: Стикер-картинка без надписи: «без текста костёр», «картинку две розы».
+    ILLUSTRATE = "illustrate"
     DELETE = "delete"
     #: Просьба вернуть удалённое. Возврата нет — бот объясняет это, а не рисует.
     GONE = "gone"
@@ -66,6 +96,28 @@ def _strip_quotes(text: str) -> str:
     while len(text) >= 2 and text[0] in _QUOTES and text[-1] in _QUOTES:
         text = text[1:-1].strip()
     return text
+
+
+def _textless_rest(text: str) -> str | None:
+    """«без текста костёр» -> «костёр»; не команда — None."""
+    lowered = text.lower()
+    for prefix in _TEXTLESS_PREFIXES:
+        if lowered.startswith(prefix):
+            rest = text[len(prefix) :]
+            if rest and not rest[0].isspace() and rest[0] not in _QUOTES:
+                continue
+            return rest.strip()
+    return None
+
+
+def suggest_textless(phrase: str) -> bool:
+    """Похожа ли фраза на описание картинки, а не на реплику для плашки."""
+    words = [w.strip(".,!?…").lower() for w in phrase.split()]
+    if not 1 <= len(words) <= 3:
+        return False
+    if any(ch in phrase for ch in "?!"):
+        return False
+    return any(w in _VISUAL_WORDS for w in words)
 
 
 def _starts_with(text: str, verbs: tuple[str, ...]) -> str | None:
@@ -121,6 +173,13 @@ def parse(
     rest = _starts_with(raw, _DRAW_VERBS)
     if rest is not None:
         rest = _SCOPE_RE.sub("", rest)
+        textless = _textless_rest(_strip_quotes(rest))
+        if textless:
+            return Intent(Action.ILLUSTRATE, _strip_quotes(textless), force, addressed)
         return Intent(Action.DRAW, _strip_quotes(rest), force, addressed)
+
+    textless = _textless_rest(raw)
+    if textless:
+        return Intent(Action.ILLUSTRATE, _strip_quotes(textless), force, addressed)
 
     return Intent(Action.DRAW, _strip_quotes(raw), force, addressed)

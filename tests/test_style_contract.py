@@ -65,7 +65,9 @@ def test_prompt_matches_canonical_constraints_and_has_no_ad_hoc_arrow_ban():
     assert "no gloss" in prompt
     assert "no drop shadows" in prompt
     assert "no photorealism/photo" in prompt
-    assert "No more than three colours" in prompt
+    # v0.2: счёт «не больше трёх цветов» заменён запретом выходить за палитру —
+    # иначе оттенки rust/terracotta/sand были бы нарушением собственного промпта.
+    assert "outside the approved WNDR palette" in prompt
     assert "No arrows" not in prompt
     assert "aura-like waves" not in prompt
 

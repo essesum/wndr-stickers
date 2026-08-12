@@ -4,22 +4,42 @@
 всегда с твёрдым знаком, «ё» не превращается в «е», а вопросительный знак
 появляется ровно тогда, когда он есть в исходной фразе.
 
-Акцентное слово помечается звёздочками: «Это не *тантра*».
+Акцентное слово помечается звёздочками: «Это не *тантра*». Если разметки нет,
+акцент иногда выбирается сам (auto_accent) — это главный источник
+типографического разброса при жёсткой палитре.
 """
 from __future__ import annotations
 
+import random
 import re
 from dataclasses import dataclass
 
 from PIL import Image, ImageDraw, ImageFont
 
 from .plate import Rect
-from .style import ACCENT, BLACK, CREAM
+from .style import ACCENT, BLACK, CREAM, RUST, SAND, TERRACOTTA
 
 _ACCENT_RE = re.compile(r"\*([^*]+)\*")
 
+#: Кавычки на стикерах запрещены совсем (решение Кати 2026-08-12) — вычищаются
+#: из фразы где угодно, не только по краям.
+_QUOTE_CHARS = "«»\"“”„‚"
+_QUOTE_TABLE = str.maketrans("", "", _QUOTE_CHARS)
+
 MAX_LINES = 3
 LINE_SPACING = 0.12  # доля от кегля
+
+#: Служебные слова акцентом не выделяются: «и» оранжевым — это не акцент, а шум.
+_SKIP_ACCENT_WORDS = frozenset(
+    "и в на не с я ты мы вы он она оно они это эта этот же бы а но у о об за "
+    "от до по из как что чтобы так там тут все всё еще ещё уже для при или "
+    "ли ни то мой моя твой твоя свой своя нет да".split()
+)
+
+#: Как часто безразметочная фраза получает автоакцент и как часто под акцентом
+#: появляется росчерк. Не всегда: постоянный приём перестаёт быть приёмом.
+AUTO_ACCENT_CHANCE = 0.6
+FLOURISH_CHANCE = 0.5
 
 
 @dataclass(frozen=True)
@@ -41,11 +61,33 @@ def parse_accents(phrase: str) -> tuple[str, list[Word]]:
     words: list[Word] = []
     for raw in phrase.split():
         accent = bool(_ACCENT_RE.search(raw))
-        clean = _ACCENT_RE.sub(r"\1", raw)
+        clean = _ACCENT_RE.sub(r"\1", raw).translate(_QUOTE_TABLE)
         if clean:
             words.append(Word(clean, accent))
     plain = " ".join(w.text for w in words)
     return plain, words
+
+
+def auto_accent(
+    words: list[Word],
+    rng: random.Random,
+    *,
+    chance: float = AUTO_ACCENT_CHANCE,
+) -> list[Word]:
+    """Выбрать акцентное слово за человека, если он не разметил его сам."""
+    if len(words) < 2 or any(w.accent for w in words):
+        return words
+    if rng.random() >= chance:
+        return words
+    candidates = [
+        i
+        for i, w in enumerate(words)
+        if len(w.text) >= 4 and w.text.lower().strip("!?.,…") not in _SKIP_ACCENT_WORDS
+    ]
+    if not candidates:
+        return words
+    index = rng.choice(candidates)
+    return [Word(w.text, i == index) for i, w in enumerate(words)]
 
 
 def _relative_luminance(rgb: tuple[int, int, int]) -> float:
@@ -63,9 +105,16 @@ def contrast_ratio(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
     return (lighter + 0.05) / (darker + 0.05)
 
 
+#: Тёмные заливки носят кремовый текст, светлые — чёрный. Оттенки v0.2 входят
+#: в поиск ближайшего цвета, иначе терракотовая плашка считалась бы оранжевой
+#: и получила бы кремовый текст с контрастом 2.4:1.
+_PLATE_COLORS = (ACCENT, BLACK, CREAM, RUST, TERRACOTTA, SAND)
+_DARK_FILLS = (ACCENT, BLACK, RUST)
+
+
 def _nearest_base_color(background: tuple[int, int, int]) -> tuple[int, int, int]:
     return min(
-        (ACCENT, BLACK, CREAM),
+        _PLATE_COLORS,
         key=lambda c: sum((a - b) ** 2 for a, b in zip(c, background, strict=True)),
     )
 
@@ -73,15 +122,15 @@ def _nearest_base_color(background: tuple[int, int, int]) -> tuple[int, int, int
 def pick_text_color(background: tuple[int, int, int]) -> tuple[int, int, int]:
     """Canonical pairing from the official guide, not a generic contrast guess."""
     nearest = _nearest_base_color(background)
-    return CREAM if nearest in (ACCENT, BLACK) else BLACK
+    return CREAM if nearest in _DARK_FILLS else BLACK
 
 
 def pick_accent_color(
     background: tuple[int, int, int], text_color: tuple[int, int, int]
 ) -> tuple[int, int, int]:
-    """Orange accent on black/cream; black accent on an orange plate."""
+    """Orange accent on black/cream/sand; black accent on orange-family plates."""
     nearest = _nearest_base_color(background)
-    accent = BLACK if nearest == ACCENT else ACCENT
+    accent = BLACK if nearest in (ACCENT, RUST, TERRACOTTA) else ACCENT
     return accent if accent != text_color else (BLACK if text_color != BLACK else CREAM)
 
 
@@ -182,6 +231,26 @@ def fit_text(
     return best
 
 
+def _draw_flourish(
+    draw: ImageDraw.ImageDraw,
+    x: float,
+    baseline: float,
+    width: float,
+    font_size: int,
+    colour: tuple[int, int, int],
+) -> None:
+    """Росчерк под акцентным словом: лёгкая дуга, как подчёркивание от руки."""
+    y = baseline + max(2.0, font_size * 0.12)
+    sag = font_size * 0.05
+    thickness = max(2, font_size // 12)
+    draw.line(
+        [(x, y), (x + width * 0.5, y + sag), (x + width, y)],
+        fill=(*colour, 255),
+        width=thickness,
+        joint="curve",
+    )
+
+
 def render(
     image: Image.Image,
     layout: Layout,
@@ -190,6 +259,7 @@ def render(
     *,
     text_color: tuple[int, int, int],
     accent_color: tuple[int, int, int],
+    underline_accents: bool = False,
 ) -> Image.Image:
     """Рисуем строки по центру области. Акцентные слова — отдельным цветом."""
     out = image.convert("RGBA").copy()
@@ -213,7 +283,10 @@ def render(
         for i, word in enumerate(line):
             colour = accent_color if word.accent else text_color
             draw.text((x, baseline), word.text, font=font, fill=(*colour, 255), anchor="ls")
-            x += font.getlength(word.text)
+            word_width = font.getlength(word.text)
+            if word.accent and underline_accents:
+                _draw_flourish(draw, x, baseline, word_width, layout.font_size, colour)
+            x += word_width
             if i < len(line) - 1:
                 x += space_width
     return out
@@ -227,15 +300,31 @@ def typeset(
     background: tuple[int, int, int],
     *,
     max_lines: int = MAX_LINES,
+    rng: random.Random | None = None,
 ) -> tuple[Image.Image, Layout]:
-    """Полный проход: разбор акцентов -> подбор кегля -> отрисовка."""
+    """Полный проход: разбор акцентов -> подбор кегля -> отрисовка.
+
+    С rng включается типографический разброс: автоакцент и росчерк. Без rng
+    поведение прежнее и полностью детерминированное — на этом держатся тесты
+    и rebuild существующих стикеров.
+    """
     _, words = parse_accents(phrase)
+    if rng is not None:
+        words = auto_accent(words, rng)
     layout = fit_text(words, rect, font_path, max_lines=max_lines)
     if layout is None:
         raise ValueError(f"Текст не помещается в область {rect.as_tuple()}")
     text_color = pick_text_color(background)
     accent_color = pick_accent_color(background, text_color)
+    has_accent = any(w.accent for line in layout.lines for w in line)
+    underline = rng is not None and has_accent and rng.random() < FLOURISH_CHANCE
     rendered = render(
-        plate, layout, rect, font_path, text_color=text_color, accent_color=accent_color
+        plate,
+        layout,
+        rect,
+        font_path,
+        text_color=text_color,
+        accent_color=accent_color,
+        underline_accents=underline,
     )
     return rendered, layout
