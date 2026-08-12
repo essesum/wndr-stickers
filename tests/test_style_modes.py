@@ -29,16 +29,58 @@ def test_mode_by_key():
     assert style.mode_by_key("nope") is None
 
 
-def test_classic_mode_is_the_original_restrained_style():
-    """Classic — первый стиль: базовая тройка, спокойная плашка, без картинок."""
+def test_classic_mode_is_truly_plain():
+    """Classic — «без рюшек и всего»: базовая тройка, plain-плашка, без картинок."""
     mode = style.mode_by_key("classic")
     for seed in range(200):
         rng = random.Random(seed)
         combo = style.pick_combo(rng, keys=mode.combo_keys)
         assert combo["key"] in ("black-plate", "accent-plate", "cream-plate")
         density = style.pick_density(rng, keys=mode.density_keys)
-        assert density.key in ("bare", "framed")
+        assert density.key == "plain"
         assert style.pick_motif(rng, chance=mode.motif_chance) is None
+        shape = style.pick_shape(rng=rng, bank=style.shape_bank(mode.look))
+        assert shape.key.startswith("clean-")
+
+
+def test_clean_shapes_carry_no_ornament():
+    """В гладком банке нет ни орнамента, ни двойных кантов, ни угловых меток."""
+    for shape in style.CLEAN_SHAPES:
+        for word in ("ornament", "star", "wreath", "scallop", "doubled", "engraved"):
+            assert word not in shape.prompt, (shape.key, word)
+
+
+def test_clean_look_prompt_is_unadorned():
+    prompt = style.build_plate_prompt(
+        shape=style.shape_by_key("clean-rect"),
+        combo={"fill": "cream #F2E2C8"},
+        density=style.density_by_key("plain"),
+        look="clean",
+    )
+    assert "richly decorated" not in prompt
+    assert "COMPLETELY PLAIN" in prompt
+    assert "unadorned" in prompt
+
+
+def test_ornate_look_is_still_the_default():
+    prompt = style.build_plate_prompt(
+        shape=style.shape_by_key("rounded-rect"),
+        combo={"fill": "cream #F2E2C8"},
+        density=style.density_by_key("framed"),
+    )
+    assert "richly decorated" in prompt
+
+
+def test_plain_density_never_falls_out_of_the_common_draw():
+    """Вес 0: plain приходит только по явному запросу classic-режима."""
+    keys = {style.pick_density(random.Random(seed)).key for seed in range(300)}
+    assert "plain" not in keys
+    assert keys == {"bare", "framed", "ornate"}
+
+
+def test_shape_by_key_finds_both_banks():
+    assert style.shape_by_key("rounded-rect") is not None
+    assert style.shape_by_key("clean-pill") is not None
 
 
 def test_expressive_mode_still_uses_full_variety():

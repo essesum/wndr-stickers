@@ -113,14 +113,63 @@ SHAPES: tuple[Shape, ...] = (
 )
 
 
-def pick_shape(allow_arrows: bool = True, rng: random.Random | None = None) -> Shape:
+#: Гладкий банк для classic-режима (решение Кати, 2026-08-12): «без рюшек
+#: и всего». Ни орнамента, ни угловых меток, ни двойных кантов — форма,
+#: заливка, один тонкий кант. Пустота здесь и есть дизайн.
+CLEAN_SHAPES: tuple[Shape, ...] = (
+    Shape(
+        "clean-rect",
+        "a plain rounded rectangle plate with a single thin contrasting keyline "
+        "just inside the edge and nothing else",
+        "нейтральный, много текста",
+    ),
+    Shape(
+        "clean-oval",
+        "a plain horizontal oval plate with a single thin contrasting keyline "
+        "and nothing else",
+        "спокойный, вывеска",
+    ),
+    Shape(
+        "clean-pill",
+        "a plain pill-shaped capsule plate with a single thin contrasting "
+        "keyline and nothing else",
+        "дружелюбный, компактный",
+    ),
+    Shape(
+        "clean-banner",
+        "a plain horizontal banner plate with straight angled cut ends and a "
+        "single thin contrasting keyline, nothing else",
+        "плакатный, лозунг",
+    ),
+    Shape(
+        "clean-arrow",
+        "a plain arrow / pointer badge with a single thin contrasting keyline "
+        "and nothing else",
+        "вводит продолжение",
+        is_arrow=True,
+    ),
+)
+
+ALL_SHAPES: tuple[Shape, ...] = SHAPES + CLEAN_SHAPES
+
+
+def shape_bank(look: str) -> tuple[Shape, ...]:
+    return CLEAN_SHAPES if look == "clean" else SHAPES
+
+
+def pick_shape(
+    allow_arrows: bool = True,
+    rng: random.Random | None = None,
+    *,
+    bank: tuple[Shape, ...] | None = None,
+) -> Shape:
     rng = rng or random.Random()
-    pool = [s for s in SHAPES if allow_arrows or not s.is_arrow]
+    pool = [s for s in (bank or SHAPES) if allow_arrows or not s.is_arrow]
     return rng.choice(pool)
 
 
 def shape_by_key(key: str) -> Shape | None:
-    return next((s for s in SHAPES if s.key == key), None)
+    return next((s for s in ALL_SHAPES if s.key == key), None)
 
 
 # --- Ornament density --------------------------------------------------------
@@ -135,6 +184,15 @@ class Density:
 
 
 DENSITIES: tuple[Density, ...] = (
+    Density(
+        "plain",
+        "Keep the plate COMPLETELY PLAIN: only the flat single-colour fill, the "
+        "cream die-cut outline and one thin inner keyline. No ornament "
+        "whatsoever — no marks, no stars, no rays, no sprigs, no corner "
+        "decorations, no patterns. Pure minimal signage; the emptiness is the "
+        "design.",
+        0,
+    ),
     Density(
         "bare",
         "Keep the plate almost bare: the die-cut outline, one thin inner keyline, "
@@ -165,7 +223,12 @@ def pick_density(
 ) -> Density:
     rng = rng or random.Random()
     pool = [d for d in DENSITIES if keys is None or d.key in keys]
-    return rng.choices(pool, weights=[d.weight for d in pool], k=1)[0]
+    weights = [d.weight for d in pool]
+    # «plain» несёт вес 0: в общий розыгрыш не попадает, только по явному
+    # запросу classic-режима — тогда веса пула нулевые и жребий не нужен.
+    if not any(weights):
+        weights = [1] * len(pool)
+    return rng.choices(pool, weights=weights, k=1)[0]
 
 
 def density_by_key(key: str) -> Density | None:
@@ -277,24 +340,30 @@ class Mode:
     motif_chance: float
     typographic_spread: bool  # автоакцент и росчерк
     weight: int
+    look: str  # ключ LOOKS и выбор банка форм (shape_bank)
 
 
 MODES: tuple[Mode, ...] = (
+    # «Без рюшек и всего»: гладкие формы, plain-плотность, ни мотивов,
+    # ни автоакцента. Контраст с expressive должен быть виден с одного
+    # взгляда — поэтому веса поровну, чтобы чередование ощущалось.
     Mode(
         "classic",
         combo_keys=("black-plate", "accent-plate", "cream-plate"),
-        density_keys=("bare", "framed"),
+        density_keys=("plain",),
         motif_chance=0.0,
         typographic_spread=False,
-        weight=2,
+        weight=1,
+        look="clean",
     ),
     Mode(
         "expressive",
         combo_keys=None,
-        density_keys=None,
+        density_keys=("bare", "framed", "ornate"),
         motif_chance=MOTIF_CHANCE,
         typographic_spread=True,
-        weight=3,
+        weight=1,
+        look="ornate",
     ),
 )
 
@@ -336,8 +405,7 @@ Palette strictly and only: burnt orange #CC3D11, near-black #0D0D0D, cream \
 warm sand #D9BE93 — used sparingly, plus the off-white die-cut outline #F7F3EA. \
 The design colours may appear together in the frame and ornament; the flat \
 central fill stays a single colour.
-Flat retro 1970s signage / silkscreen look, in the spirit of an ornate vintage \
-label: the border and frame are richly decorated, the centre is calm.
+{look}
 
 CRITICAL — the interior of the plate must be a FLAT EMPTY area of solid {fill}, \
 completely clean and uninterrupted across the middle {clean_band} of the plate. \
@@ -354,6 +422,24 @@ for automatic cut-out.
 {negative}
 """
 
+#: Как выглядит плашка целиком: нарядная этикетка (expressive) или голая
+#: вывеска (classic). Раньше «ornate vintage label» был зашит в PLATE_PROMPT
+#: намертво — из-за этого даже сдержанный режим выходил с рюшками.
+LOOKS = {
+    "ornate": (
+        "Flat retro 1970s signage / silkscreen look, in the spirit of an ornate "
+        "vintage label: the border and frame are richly decorated, the centre "
+        "is calm."
+    ),
+    "clean": (
+        "Flat retro 1970s signage / silkscreen look, minimal and confident: one "
+        "solid colour plate, crisp edges, a single thin keyline, and nothing "
+        "else. The plate is deliberately unadorned — bold type on an empty "
+        "plate is the whole design."
+    ),
+}
+
+
 ILLUSTRATION_CLAUSE = """\
 Add ONE very simple, almost iconic illustrative element ({motif}) tucked into the \
 {placement} edge of the plate only. Draw it as a vintage engraving / botanical \
@@ -363,7 +449,7 @@ clean central area.\
 
 #: Оставлено для совместимости: раньше это был единственный вариант оформления и
 #: он требовал пустой плашки. Теперь оформление выбирается из DENSITIES.
-BARE_CLAUSE = DENSITIES[0].clause
+BARE_CLAUSE = next(d for d in DENSITIES if d.key == "bare").clause
 
 ILLUSTRATION_PROMPT = """\
 Using the attached WNDR sheet as a STRICT style reference, draw ONE die-cut \
@@ -391,6 +477,7 @@ def build_plate_prompt(
     clean_band: str = "60%",
     allow_arrows: bool = True,
     density: Density | None = None,
+    look: str = "ornate",
 ) -> str:
     """Prompt for an empty plate — user phrase is rendered later by code.
 
@@ -400,7 +487,7 @@ def build_plate_prompt(
     _ = allow_arrows  # Backward-compatible argument; arrows are canonical in v0.1.
     roses = mentions_roses(shape.prompt, motif)
     linework = "deep rust #992D0E" if roses else "black"
-    parts = [(density or DENSITIES[0]).clause]
+    parts = [density.clause if density else BARE_CLAUSE]
     if motif:
         parts.append(
             ILLUSTRATION_CLAUSE.format(motif=motif, placement=placement, linework=linework)
@@ -414,6 +501,7 @@ def build_plate_prompt(
         clean_band=clean_band,
         illustration_clause=illustration,
         negative=NEGATIVE,
+        look=LOOKS[look],
     )
 
 

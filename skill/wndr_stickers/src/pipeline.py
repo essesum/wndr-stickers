@@ -70,7 +70,11 @@ def make_sticker(
 
     shape = style.shape_by_key(shape_key) if shape_key else None
     if shape is None:
-        shape = style.pick_shape(allow_arrows=settings.allow_arrow_shapes, rng=rng)
+        shape = style.pick_shape(
+            allow_arrows=settings.allow_arrow_shapes,
+            rng=rng,
+            bank=style.shape_bank(mode.look),
+        )
     # Плотность и мотив выбираются на каждый стикер. Без этого пак получался
     # одинаковым: сперва все плашки были голые, потом все — нарядные.
     density = style.pick_density(rng, keys=mode.density_keys)
@@ -86,6 +90,7 @@ def make_sticker(
         placement=style.pick_placement(rng),
         density=density,
         allow_arrows=settings.allow_arrow_shapes,
+        look=mode.look,
     )
 
     generated = imagegen.generate(prompt, settings.reference_sheet_path, settings)
