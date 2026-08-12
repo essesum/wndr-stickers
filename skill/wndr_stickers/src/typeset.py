@@ -77,6 +77,10 @@ def auto_accent(
     """Выбрать акцентное слово за человека, если он не разметил его сам."""
     if len(words) < 2 or any(w.accent for w in words):
         return words
+    # На двухсловной фразе акцент перекрашивает половину стикера — если делать
+    # это с обычной частотой, двухцветность сама становится монотонной.
+    if len(words) == 2:
+        chance *= 0.5
     if rng.random() >= chance:
         return words
     candidates = [
@@ -138,9 +142,14 @@ def pick_accent_color(
     *,
     forbid_black: bool = False,
 ) -> tuple[int, int, int]:
-    """Orange accent on black/cream/sand; black accent on orange-family plates."""
+    """Orange accent on black/cream/sand; black accent on orange-family plates.
+
+    Ржавая плашка — исключение среди оранжевых: чёрный на #992D0E тонет
+    (контраст ~1.8:1, живой пример — bolshe-zhizni-v9), поэтому акцент там
+    оранжевый, как на чёрной.
+    """
     nearest = _nearest_base_color(background)
-    accent = BLACK if nearest in (ACCENT, RUST, TERRACOTTA) else ACCENT
+    accent = BLACK if nearest in (ACCENT, TERRACOTTA) else ACCENT
     if accent == text_color:
         accent = BLACK if text_color != BLACK else CREAM
     if forbid_black and accent == BLACK:
@@ -294,13 +303,16 @@ def render(
     space_width = font.getlength(" ")
     for index, line in enumerate(layout.lines):
         baseline = first_baseline + index * step
+        last_line = index == len(layout.lines) - 1
         x0, _, x1, _ = boxes[index]
         x = rect.left + (rect.width - (x1 - x0)) / 2 - x0
         for i, word in enumerate(line):
             colour = accent_color if word.accent else text_color
             draw.text((x, baseline), word.text, font=font, fill=(*colour, 255), anchor="ls")
             word_width = font.getlength(word.text)
-            if word.accent and underline_accents:
+            # Росчерк — только на нижней строке: между строками он попадает
+            # в межстрочный зазор и читается как зачёркивание слова сверху.
+            if word.accent and underline_accents and last_line:
                 _draw_flourish(draw, x, baseline, word_width, layout.font_size, colour)
             x += word_width
             if i < len(line) - 1:
