@@ -11,7 +11,15 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import ErrorEvent, Message
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeAllChatAdministrators,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeDefault,
+    ErrorEvent,
+    Message,
+)
 
 from bot.handlers import commands as commands_handlers
 from bot.handlers import generate as generate_handlers
@@ -22,6 +30,39 @@ from skill.wndr_stickers.src.instance_lock import AlreadyRunning, InstanceLock
 log = logging.getLogger(__name__)
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+PRIVATE_COMMANDS = (
+    BotCommand(command="pack", description="посмотреть общий стикерпак"),
+    BotCommand(command="zip", description="скачать активные стикеры архивом"),
+    BotCommand(command="history", description="посмотреть историю общего пака"),
+    BotCommand(command="delete", description="убрать свой стикер из пака"),
+    BotCommand(command="style", description="посмотреть стиль и палитру WNDR"),
+    BotCommand(command="quota", description="посмотреть лимиты генерации"),
+    BotCommand(command="help", description="как пользоваться ботом"),
+)
+
+
+async def sync_private_commands(bot: Bot) -> bool:
+    """Показать полезные команды в нативном меню Telegram внутри лички."""
+    try:
+        # Telegram хранит меню отдельно для каждого scope. Чистим общие scopes,
+        # чтобы старое глобальное меню не продолжало показываться в группах.
+        for scope in (
+            BotCommandScopeDefault(),
+            BotCommandScopeAllGroupChats(),
+            BotCommandScopeAllChatAdministrators(),
+        ):
+            await bot.delete_my_commands(scope=scope)
+        await bot.set_my_commands(
+            list(PRIVATE_COMMANDS),
+            scope=BotCommandScopeAllPrivateChats(),
+        )
+    except TelegramAPIError as exc:
+        # Меню полезно, но не важнее самого polling: краткий сбой Telegram API
+        # не должен полностью выключить генератор.
+        log.warning("не удалось синхронизировать private command menu: %s", exc)
+        return False
+    return True
 
 
 def setup_logging(settings: Settings) -> None:
@@ -118,12 +159,14 @@ async def main() -> None:
     # .me() кладёт результат в кэш бота — обработчики потом читают его без
     # похода в сеть. Одновременно это проверка токена до старта polling.
     me = await bot.me()
+    menu_synced = await sync_private_commands(bot)
     log.info(
-        "wndr-stickers запущен: @%s, доступ=%s, провайдеры=%s, "
+        "wndr-stickers запущен: @%s, доступ=%s, провайдеры=%s, меню=%s, "
         "управление=community, владелец пака настроен=%s",
         me.username,
         settings.access_mode,
         settings.provider_chain,
+        [command.command for command in PRIVATE_COMMANDS] if menu_synced else "sync-failed",
         bool(settings.sticker_pack_owner),
     )
     try:
