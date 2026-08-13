@@ -20,7 +20,6 @@ from skill.wndr_stickers.src.config import Settings
 from skill.wndr_stickers.src.intent import Action, parse, suggest_textless
 from skill.wndr_stickers.src.style import CREAM
 
-
 # --- intent -------------------------------------------------------------------
 
 @pytest.mark.parametrize(
@@ -48,6 +47,12 @@ def test_textless_words_inside_a_phrase_do_not_trigger():
 @pytest.mark.parametrize("phrase", ["костёр", "две розы", "кот в короне"])
 def test_visual_phrase_is_suggested_as_textless(phrase):
     assert suggest_textless(phrase) is True
+
+
+@pytest.mark.parametrize("phrase", ["солнце", "луна", "месяц", "глаз", "комета"])
+def test_mystical_motifs_are_not_suggested_as_textless(phrase):
+    """Бот не должен сам подталкивать к мотивам, запрещённым visual contract."""
+    assert suggest_textless(phrase) is False
 
 
 @pytest.mark.parametrize(

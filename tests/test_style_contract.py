@@ -89,10 +89,16 @@ def test_make_sticker_keeps_user_phrase_out_of_image_provider_prompt(monkeypatch
 
     class Settings:
         allow_arrow_shapes = True
-        reference_sheet_path = tmp_path / "reference.png"
+        reference_sheet_path = tmp_path / "reference-retro.png"
+        reference_sheet_flat = tmp_path / "reference-flat.png"
         stickers_dir = tmp_path / "stickers"
         raw_dir = tmp_path / "raw"
-        font_path = "/System/Library/Fonts/Supplemental/Impact.ttf"
+        font_file = ROOT / "assets/fonts/GolosText-Black.ttf"
+
+        def reference_for(self, look):
+            if look == "clean":
+                return self.reference_sheet_flat
+            return self.reference_sheet_path
 
     def fake_generate(prompt, reference, settings):
         seen["prompt"] = prompt
@@ -106,7 +112,11 @@ def test_make_sticker_keeps_user_phrase_out_of_image_provider_prompt(monkeypatch
 
     assert user_phrase not in seen["prompt"]
     assert "NO text" in seen["prompt"]
-    assert seen["reference"] == Settings.reference_sheet_path
+    # Каждому характеру — свой эталонный лист; какой именно, решает режим.
+    assert seen["reference"] in (
+        Settings.reference_sheet_path,
+        Settings.reference_sheet_flat,
+    )
 
 
 def test_pipeline_rejects_and_removes_noncanonical_sticker(monkeypatch, tmp_path):
@@ -130,10 +140,11 @@ def test_pipeline_rejects_and_removes_noncanonical_sticker(monkeypatch, tmp_path
 
     settings = SimpleNamespace(
         allow_arrow_shapes=True,
-        reference_sheet_path=tmp_path / "reference.png",
+        reference_sheet_path=tmp_path / "reference-retro.png",
         stickers_dir=tmp_path / "stickers",
         raw_dir=tmp_path / "raw",
-        font_path="/System/Library/Fonts/Supplemental/Impact.ttf",
+        font_file=ROOT / "assets/fonts/GolosText-Black.ttf",
+        reference_for=lambda look: tmp_path / "reference-retro.png",
     )
     monkeypatch.setattr(pipeline.imagegen, "generate", lambda *_args, **_kwargs: FakeGenerated())
 

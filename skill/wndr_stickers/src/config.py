@@ -36,9 +36,12 @@ class Settings(BaseSettings):
 
     https_proxy: str = ""
 
-    # Стиль
-    reference_sheet: Path = Path("assets/reference/wndr-reference-sheet.png")
-    font_path: Path = Path("/System/Library/Fonts/Supplemental/Impact.ttf")
+    # Стиль. Два эталонных листа от Кати (2026-08-13): плоский для classic,
+    # ретро-принт для expressive и иллюстраций. Оба нарисованы GPT Image и
+    # прикладываются к каждой генерации как строгий референс.
+    reference_sheet: Path = Path("assets/reference/wndr-ref-retro.png")
+    reference_sheet_flat: Path = Path("assets/reference/wndr-ref-flat.png")
+    font_path: Path = Path("assets/fonts/GolosText-Black.ttf")
     allow_arrow_shapes: bool = True
 
     # Стикерпак
@@ -110,10 +113,23 @@ class Settings(BaseSettings):
     def zip_path(self) -> Path:
         return self.output_dir / "wndr-stickers.zip"
 
+    @staticmethod
+    def _absolute(p: Path) -> Path:
+        return p if p.is_absolute() else REPO_ROOT / p
+
     @property
     def reference_sheet_path(self) -> Path:
-        p = self.reference_sheet
-        return p if p.is_absolute() else REPO_ROOT / p
+        return self._absolute(self.reference_sheet)
+
+    def reference_for(self, look: str) -> Path:
+        """Реф-лист под характер плашки: flat-лист для classic, ретро — остальным."""
+        if look == "clean":
+            return self._absolute(self.reference_sheet_flat)
+        return self.reference_sheet_path
+
+    @property
+    def font_file(self) -> Path:
+        return self._absolute(self.font_path)
 
     @property
     def provider_chain(self) -> list[str]:

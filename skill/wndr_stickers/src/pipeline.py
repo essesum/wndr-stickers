@@ -93,7 +93,9 @@ def make_sticker(
         look=mode.look,
     )
 
-    generated = imagegen.generate(prompt, settings.reference_sheet_path, settings)
+    # Каждому характеру — свой эталонный лист: classic видит плоский,
+    # expressive — ретро. Модель копирует то, что ей показали.
+    generated = imagegen.generate(prompt, settings.reference_for(mode.look), settings)
 
     plain, _ = typeset.parse_accents(phrase)
     slug, version, filename = naming.reserve(plain, settings.stickers_dir)
@@ -103,14 +105,24 @@ def make_sticker(
     sticker = cutout.cut_out(raw_path)
     area = plate.safe_text_area(sticker)
     background = plate.dominant_color(sticker, area)
+    # Пятно/градиент в зоне текста — брак плашки: медиана цвета ещё «своя»,
+    # а текст лёг бы на кашу. Ловим до впечатывания, файл в raw для разбора.
+    off_fill = plate.off_fill_fraction(sticker, area, background)
+    if off_fill > 0.05:
+        raise StickerVerificationError(
+            verify.VerifyResult(
+                ok=False,
+                problems=[
+                    f"неровная заливка в зоне текста ({off_fill:.0%} чужого цвета)"
+                ],
+            )
+        )
     lettered, layout = typeset.typeset(
         sticker,
         phrase,
         area,
-        str(settings.font_path),
+        str(settings.font_file),
         background,
-        # В classic-режиме rng не передаётся: типографика прежняя,
-        # детерминированная — без автоакцента и росчерка.
         rng=rng if mode.typographic_spread else None,
         forbid_black=roses,
     )
@@ -194,7 +206,7 @@ def rebuild_from_raw(raw_path: Path, phrase: str, settings: Settings) -> Sticker
     area = plate.safe_text_area(sticker)
     background = plate.dominant_color(sticker, area)
     lettered, layout = typeset.typeset(
-        sticker, phrase, area, str(settings.font_path), background
+        sticker, phrase, area, str(settings.font_file), background
     )
     plain, _ = typeset.parse_accents(phrase)
     slug, version, filename = naming.reserve(plain, settings.stickers_dir)
@@ -225,5 +237,5 @@ def preview_layout(
     area = plate.Rect(
         int(box[0] * 0.08), int(box[1] * 0.12), int(box[0] * 0.92), int(box[1] * 0.88)
     )
-    rendered, _ = typeset.typeset(canvas, phrase, area, str(settings.font_path), style.BLACK)
+    rendered, _ = typeset.typeset(canvas, phrase, area, str(settings.font_file), style.BLACK)
     return rendered

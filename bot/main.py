@@ -89,9 +89,12 @@ async def main() -> None:
     if not settings.telegram_owner_id:
         raise SystemExit("TELEGRAM_OWNER_ID пуст — без него нельзя владеть стикерпаком.")
     if not settings.reference_sheet_path.exists():
-        raise SystemExit(f"Нет референс-листа: {settings.reference_sheet_path}")
-    if not settings.font_path.exists():
-        raise SystemExit(f"Нет шрифта: {settings.font_path}")
+        raise SystemExit(f"Нет ретро-референса: {settings.reference_sheet_path}")
+    flat_reference = settings.reference_for("clean")
+    if not flat_reference.exists():
+        raise SystemExit(f"Нет плоского референса: {flat_reference}")
+    if not settings.font_file.exists():
+        raise SystemExit(f"Нет шрифта: {settings.font_file}")
 
     lock = InstanceLock(settings.lock_path)
     try:

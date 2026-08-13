@@ -160,6 +160,33 @@ def safe_text_area(
     return rect
 
 
+def off_fill_fraction(
+    image: Image.Image,
+    rect: Rect,
+    fill: tuple[int, int, int],
+    *,
+    tolerance: float = 60.0,
+) -> float:
+    """Доля пикселей области, заметно отличных от цвета заливки.
+
+    Ловит брак вроде размытого светлого пятна посреди плашки: медиана ещё
+    может совпасть с задуманной заливкой, но половина зоны текста — чужого
+    цвета, и текст ляжет на кашу. На честной ровной заливке доля около нуля.
+    """
+    rgba = np.asarray(image.convert("RGBA"))
+    patch = rgba[rect.top : rect.bottom, rect.left : rect.right]
+    if patch.size == 0:
+        return 1.0
+    visible = patch[patch[:, :, 3] > 8]
+    if visible.size == 0:
+        return 1.0
+    dist = np.linalg.norm(
+        visible[:, :3].astype(np.float64) - np.asarray(fill, dtype=np.float64),
+        axis=1,
+    )
+    return float((dist > tolerance).mean())
+
+
 def dominant_color(image: Image.Image, rect: Rect) -> tuple[int, int, int]:
     """Медианный цвет заливки внутри области — по нему выбираем цвет текста."""
     rgba = np.asarray(image.convert("RGBA"))

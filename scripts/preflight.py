@@ -65,7 +65,11 @@ async def main() -> int:
     print(f"{OK} управление паком: community self-governance")
 
     print("\nСтиль")
-    for label, path in (("референс", s.reference_sheet_path), ("шрифт", s.font_path)):
+    for label, path in (
+        ("ретро-референс", s.reference_sheet_path),
+        ("плоский референс", s.reference_for("clean")),
+        ("шрифт", s.font_file),
+    ):
         if path.exists():
             print(f"{OK} {label}: {path.name}")
         else:

@@ -1,9 +1,11 @@
 """Canonical WNDR style contract.
 
-The source of truth is docs/reference/WNDR-Sticker-Agent-v0.1.pdf, sections
-2 (approved result), 8 (visual style), and 9 (generation prompts). The image
-model draws only empty plates/illustrations on black; all sticker text is added
-later by code.
+The source of truth is the two approved reference sheets in assets/reference/
+(решение Кати, 2026-08-13): wndr-ref-flat.png — плоская стикер-графика для
+classic-режима, wndr-ref-retro.png — ретро-шелкография для expressive и
+иллюстраций. docs/reference/WNDR-Sticker-Agent-v0.1.pdf остаётся историей v0.1.
+The image model draws only empty plates/illustrations on black; all sticker
+text is added later by code.
 """
 from __future__ import annotations
 
@@ -49,16 +51,22 @@ class Shape:
     is_arrow: bool = False
 
 
-#: Формы взяты с живого пака WndrMorelife: там плашка — это не прямоугольник с
-#: текстом, а оформленный знак с рамкой, кантами и орнаментом. Простые примитивы
-#: («скруглённый прямоугольник») давали пустые пресные стикеры, потому что модель
-#: честно рисовала ровно то, что просили.
+#: Формы ретро-листа (wndr-ref-retro.png): органичные кляксы, волнистые рамки,
+#: колючие вспышки, гравюрные веточки. Простые примитивы («скруглённый
+#: прямоугольник») давали пустые пресные стикеры, потому что модель честно
+#: рисовала ровно то, что просили.
 SHAPES: tuple[Shape, ...] = (
     Shape(
         "rounded-rect",
-        "a rounded rectangle plate with a doubled contrasting keyline and small "
-        "ornamental corner marks",
+        "a rounded rectangle plate with a doubled contrasting keyline frame, like "
+        "a vintage product label",
         "нейтральный, много текста",
+    ),
+    Shape(
+        "blob",
+        "an organic rounded blob plate with a smooth irregular gently-wavy contour, "
+        "like a splash of thick paint",
+        "мягкий, живой",
     ),
     Shape(
         "rosette",
@@ -73,17 +81,16 @@ SHAPES: tuple[Shape, ...] = (
         "цветущий, праздничный",
     ),
     Shape(
-        "celestial-burst",
-        "a starburst badge with long pointed rays around the whole contour, with a "
-        "small engraved crescent moon, sun face and scattered stars worked into the "
-        "rays and the frame",
-        "громкий, космический",
+        "spiky-burst",
+        "a loud starburst / splash badge with many irregular sharp triangular "
+        "spikes around the whole contour",
+        "громкий, восклицание",
     ),
     Shape(
-        "ticket",
-        "a horizontal ticket / coupon plate with semicircular notches punched into "
-        "the left and right sides and a dashed perforation line near one end",
-        "документальный, билет",
+        "scallop-frame",
+        "a rectangle plate with a softly scalloped wavy border and a dashed "
+        "keyline echoing the contour just inside the edge",
+        "открытка, аккуратный",
     ),
     Shape(
         "banner-swash",
@@ -105,46 +112,56 @@ SHAPES: tuple[Shape, ...] = (
     ),
     Shape(
         "arrow",
-        "an arrow / pointer badge with a doubled keyline and small star accents at "
-        "the tail",
+        "a road-sign arrow / pointer badge with a doubled keyline and small star "
+        "accents at the tail",
         "вводит продолжение",
         is_arrow=True,
     ),
 )
 
 
-#: Гладкий банк для classic-режима (решение Кати, 2026-08-12): «без рюшек
-#: и всего». Ни орнамента, ни угловых меток, ни двойных кантов — форма,
-#: заливка, один тонкий кант. Пустота здесь и есть дизайн.
+#: Плоский банк для classic-режима — формы с flat-листа (wndr-ref-flat.png):
+#: билет с перфорацией, облачко со строчкой-пунктиром, speech bubble, зигзаг.
+#: Плашка простая и гладкая, но с характером; никакой гравюры и винтажа.
 CLEAN_SHAPES: tuple[Shape, ...] = (
     Shape(
         "clean-rect",
-        "a plain rounded rectangle plate with a single thin contrasting keyline "
-        "just inside the edge and nothing else",
+        "a plain flat rounded rectangle plate with crisp edges and nothing else",
         "нейтральный, много текста",
     ),
     Shape(
         "clean-oval",
-        "a plain horizontal oval plate with a single thin contrasting keyline "
-        "and nothing else",
+        "a plain flat horizontal oval plate with crisp edges and nothing else",
         "спокойный, вывеска",
     ),
     Shape(
-        "clean-pill",
-        "a plain pill-shaped capsule plate with a single thin contrasting "
-        "keyline and nothing else",
-        "дружелюбный, компактный",
+        "clean-ticket",
+        "a flat horizontal ticket / coupon plate with rounded corners, "
+        "semicircular notches punched into the sides and one vertical dashed "
+        "perforation line near an end",
+        "документальный, билет",
     ),
     Shape(
-        "clean-banner",
-        "a plain horizontal banner plate with straight angled cut ends and a "
-        "single thin contrasting keyline, nothing else",
-        "плакатный, лозунг",
+        "clean-bubble",
+        "a flat rounded speech-bubble plate with a short pointed tail at a "
+        "bottom corner",
+        "реплика, разговорный",
+    ),
+    Shape(
+        "clean-cloud",
+        "a flat scalloped cloud badge with soft rounded bumps around the "
+        "contour and a dashed stitch line just inside the edge",
+        "мягкий, игривый",
+    ),
+    Shape(
+        "clean-burst",
+        "a flat badge with a jagged zigzag starburst contour of short "
+        "triangular points all around",
+        "громкий, восклицание",
     ),
     Shape(
         "clean-arrow",
-        "a plain arrow / pointer badge with a single thin contrasting keyline "
-        "and nothing else",
+        "a plain flat arrow / pointer badge with crisp edges and nothing else",
         "вводит продолжение",
         is_arrow=True,
     ),
@@ -191,7 +208,16 @@ DENSITIES: tuple[Density, ...] = (
         "whatsoever — no marks, no stars, no rays, no sprigs, no corner "
         "decorations, no patterns. Pure minimal signage; the emptiness is the "
         "design.",
-        0,
+        1,
+    ),
+    Density(
+        "spark",
+        "Decorate with exactly one or two flat four-point sparkle stars in a "
+        "contrasting palette colour, tucked near the edge of the plate away "
+        "from the centre, and optionally a few short flat emphasis dashes "
+        "radiating from the contour. Nothing else: no texture, no engraving, "
+        "no botanical ornament.",
+        3,
     ),
     Density(
         "bare",
@@ -224,8 +250,8 @@ def pick_density(
     rng = rng or random.Random()
     pool = [d for d in DENSITIES if keys is None or d.key in keys]
     weights = [d.weight for d in pool]
-    # «plain» несёт вес 0: в общий розыгрыш не попадает, только по явному
-    # запросу classic-режима — тогда веса пула нулевые и жребий не нужен.
+    # Веса играют только внутри пула режима: classic делит spark/plain 3:1
+    # (на flat-листе искры почти на каждом стикере), expressive гоняет свои.
     if not any(weights):
         weights = [1] * len(pool)
     return rng.choices(pool, weights=weights, k=1)[0]
@@ -238,19 +264,19 @@ def density_by_key(key: str) -> Density | None:
 # --- Motif bank --------------------------------------------------------------
 # Картинка внутри стикера. Механизм в коде был с самого начала, но pipeline
 # всегда передавал motif=None, поэтому ни один стикер его не получил.
+#: Никакой мистики (луны, солнца с лицами, глаза) — решение Кати 2026-08-13:
+#: в рефах её нет, а модель от неё скатывалась в таро-эстетику.
 MOTIFS: tuple[str, ...] = (
     "a pair of engraved roses with leaves",
-    "a crescent moon with small stars",
-    "an engraved sun face with rays",
     "a sprig of wheat",
     "a lightning bolt",
-    "an open hand with rays above the palm",
-    "a mountain range with a rising sun",
     "an engraved flame",
     "a leafy laurel branch",
-    "an eye with radiating lashes",
     "a blooming daisy seen from above",
-    "a comet with a curling tail",
+    "a feijoa fruit with leaves",
+    "a khinkali dumpling",
+    "a small jug of fruit punch",
+    "a curled sleeping cat",
 )
 
 #: Насколько часто внутри стикера появляется картинка. Не всегда: в референсе
@@ -306,8 +332,18 @@ COMBOS = (
     {"key": "accent-plate", "fill": "burnt orange #CC3D11", "text": "cream #F2E2C8", "weight": 3},
     {"key": "cream-plate", "fill": "cream #F2E2C8", "text": "near-black #0D0D0D", "weight": 3},
     {"key": "rust-plate", "fill": "deep rust #992D0E", "text": "cream #F2E2C8", "weight": 1},
-    {"key": "terracotta-plate", "fill": "soft terracotta #E0764A", "text": "near-black #0D0D0D", "weight": 1},
-    {"key": "sand-plate", "fill": "warm sand #D9BE93", "text": "near-black #0D0D0D", "weight": 1},
+    {
+        "key": "terracotta-plate",
+        "fill": "soft terracotta #E0764A",
+        "text": "near-black #0D0D0D",
+        "weight": 1,
+    },
+    {
+        "key": "sand-plate",
+        "fill": "warm sand #D9BE93",
+        "text": "near-black #0D0D0D",
+        "weight": 1,
+    },
 )
 
 
@@ -344,15 +380,16 @@ class Mode:
 
 
 MODES: tuple[Mode, ...] = (
-    # «Без рюшек и всего»: гладкие формы, plain-плотность, ни мотивов,
-    # ни автоакцента. Контраст с expressive должен быть виден с одного
-    # взгляда — поэтому веса поровну, чтобы чередование ощущалось.
+    # Плоский стиль flat-листа: гладкие формы с характером, звёздочки-искры,
+    # базовая тройка, ни мотивов-гравюр, автоакцент оставляем типографике.
+    # Контраст с expressive должен быть виден с одного взгляда — поэтому
+    # веса поровну, чтобы чередование ощущалось.
     Mode(
         "classic",
         combo_keys=("black-plate", "accent-plate", "cream-plate"),
-        density_keys=("plain",),
+        density_keys=("spark", "plain"),
         motif_chance=0.0,
-        typographic_spread=False,
+        typographic_spread=True,
         weight=1,
         look="clean",
     ),
@@ -385,6 +422,8 @@ NEGATIVE = (
     "NO text, NO letters, NO typography, NO numbers, NO captions, "
     "NO watermark, NO signature. "
     "No gradients, no 3D, no gloss, no drop shadows, no photorealism/photo. "
+    "No blur, no soft focus, no glow, no airbrush, no smudges or fog anywhere. "
+    "No moons, no sun faces, no celestial, mystical, tarot or zodiac imagery. "
     "No colours outside the approved WNDR palette and its listed shades; at most "
     "four palette colours in one design, not counting the cream die-cut outline. "
     "No non-black background outside the sticker."
@@ -427,15 +466,17 @@ for automatic cut-out.
 #: намертво — из-за этого даже сдержанный режим выходил с рюшками.
 LOOKS = {
     "ornate": (
-        "Flat retro 1970s signage / silkscreen look, in the spirit of an ornate "
-        "vintage label: the border and frame are richly decorated, the centre "
-        "is calm."
+        "Retro 1960s-70s silkscreen print label, exactly like the attached "
+        "reference sheet: slightly muted inks, a hint of paper grain and worn "
+        "print texture, engraved vintage ornament — botanical sprigs, laurel "
+        "branches, four-point sparkle stars, short radiating dashes. Rich "
+        "vintage frame, calm centre."
     ),
     "clean": (
-        "Flat retro 1970s signage / silkscreen look, minimal and confident: one "
-        "solid colour plate, crisp edges, a single thin keyline, and nothing "
-        "else. The plate is deliberately unadorned — bold type on an empty "
-        "plate is the whole design."
+        "Completely FLAT modern die-cut sticker graphic, exactly like the "
+        "attached reference sheet: smooth bold vector shapes, perfectly even "
+        "solid fills, crisp clean edges. Absolutely no texture, no grain, no "
+        "engraving, no vintage wear — pure flat colour, confident and graphic."
     ),
 }
 

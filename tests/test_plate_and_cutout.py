@@ -12,6 +12,7 @@ from skill.wndr_stickers.src.plate import (
     dominant_color,
     erode,
     largest_rectangle,
+    off_fill_fraction,
     safe_text_area,
 )
 from skill.wndr_stickers.src.style import ACCENT, BLACK, CREAM
@@ -132,3 +133,13 @@ def test_dominant_color_reads_the_plate_fill():
     sticker_cream = cut_out(make_plate(fill=CREAM))
     rect_cream = safe_text_area(sticker_cream)
     assert sum(dominant_color(sticker_cream, rect_cream)) > 500, "заливка светлая"
+
+
+def test_off_fill_fraction_detects_dirty_text_area():
+    img = Image.new("RGBA", (120, 80), (*CREAM, 255))
+    rect = Rect(10, 10, 110, 70)
+    assert off_fill_fraction(img, rect, CREAM) == 0.0
+
+    d = ImageDraw.Draw(img)
+    d.rectangle((10, 10, 60, 70), fill=(*ACCENT, 255))
+    assert off_fill_fraction(img, rect, CREAM) > 0.45

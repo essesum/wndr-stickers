@@ -24,42 +24,60 @@ def test_both_modes_appear():
 
 
 def test_mode_by_key():
-    assert style.mode_by_key("classic").typographic_spread is False
+    # Оба режима носят автоакцент: на flat-листе оранжевые слова почти всюду.
+    assert style.mode_by_key("classic").typographic_spread is True
     assert style.mode_by_key("expressive").typographic_spread is True
+    assert style.mode_by_key("classic").look == "clean"
+    assert style.mode_by_key("expressive").look == "ornate"
     assert style.mode_by_key("nope") is None
 
 
-def test_classic_mode_is_truly_plain():
-    """Classic — «без рюшек и всего»: базовая тройка, plain-плашка, без картинок."""
+def test_classic_mode_is_flat_sticker_sheet():
+    """Classic — плоский лист: базовая тройка, spark/plain, без гравюрных мотивов."""
     mode = style.mode_by_key("classic")
+    densities = set()
     for seed in range(200):
         rng = random.Random(seed)
         combo = style.pick_combo(rng, keys=mode.combo_keys)
         assert combo["key"] in ("black-plate", "accent-plate", "cream-plate")
         density = style.pick_density(rng, keys=mode.density_keys)
-        assert density.key == "plain"
+        assert density.key in ("spark", "plain")
+        densities.add(density.key)
         assert style.pick_motif(rng, chance=mode.motif_chance) is None
         shape = style.pick_shape(rng=rng, bank=style.shape_bank(mode.look))
         assert shape.key.startswith("clean-")
+    # Искры — основной приём, но голая плашка тоже должна выпадать.
+    assert densities == {"spark", "plain"}
 
 
-def test_clean_shapes_carry_no_ornament():
-    """В гладком банке нет ни орнамента, ни двойных кантов, ни угловых меток."""
+def test_clean_shapes_carry_no_vintage_ornament():
+    """В плоском банке нет гравюры, винтажа и ботаники — форма плоская и чистая."""
     for shape in style.CLEAN_SHAPES:
-        for word in ("ornament", "star", "wreath", "scallop", "doubled", "engraved"):
+        for word in ("engraved", "wreath", "ornament", "vintage", "botanical", "doubled"):
             assert word not in shape.prompt, (shape.key, word)
 
 
-def test_clean_look_prompt_is_unadorned():
+def test_clean_look_prompt_is_flat():
     prompt = style.build_plate_prompt(
         shape=style.shape_by_key("clean-rect"),
         combo={"fill": "cream #F2E2C8"},
         density=style.density_by_key("plain"),
         look="clean",
     )
-    assert "richly decorated" not in prompt
+    assert "silkscreen" not in prompt
     assert "COMPLETELY PLAIN" in prompt
-    assert "unadorned" in prompt
+    assert "FLAT modern die-cut sticker" in prompt
+
+
+def test_spark_density_is_flat_sparkles_only():
+    prompt = style.build_plate_prompt(
+        shape=style.shape_by_key("clean-cloud"),
+        combo={"fill": "near-black #0D0D0D"},
+        density=style.density_by_key("spark"),
+        look="clean",
+    )
+    assert "four-point sparkle stars" in prompt
+    assert "no engraving" in prompt
 
 
 def test_ornate_look_is_still_the_default():
@@ -68,19 +86,22 @@ def test_ornate_look_is_still_the_default():
         combo={"fill": "cream #F2E2C8"},
         density=style.density_by_key("framed"),
     )
-    assert "richly decorated" in prompt
+    assert "silkscreen print label" in prompt
 
 
-def test_plain_density_never_falls_out_of_the_common_draw():
-    """Вес 0: plain приходит только по явному запросу classic-режима."""
-    keys = {style.pick_density(random.Random(seed)).key for seed in range(300)}
-    assert "plain" not in keys
+def test_flat_densities_stay_out_of_expressive_draw():
+    """spark и plain — приёмы classic; expressive гоняет свои плотности."""
+    mode = style.mode_by_key("expressive")
+    keys = {
+        style.pick_density(random.Random(seed), keys=mode.density_keys).key
+        for seed in range(300)
+    }
     assert keys == {"bare", "framed", "ornate"}
 
 
 def test_shape_by_key_finds_both_banks():
     assert style.shape_by_key("rounded-rect") is not None
-    assert style.shape_by_key("clean-pill") is not None
+    assert style.shape_by_key("clean-ticket") is not None
 
 
 def test_expressive_mode_still_uses_full_variety():
@@ -146,9 +167,9 @@ def test_wreath_shape_alone_triggers_rose_rule():
 
 def test_plain_prompt_keeps_black_linework():
     prompt = style.build_plate_prompt(
-        shape=style.shape_by_key("ticket"),
+        shape=style.shape_by_key("scallop-frame"),
         combo={"fill": "cream #F2E2C8"},
-        motif="a crescent moon with small stars",
+        motif="a sprig of wheat",
         density=style.density_by_key("bare"),
     )
     assert "FORBIDDEN" not in prompt

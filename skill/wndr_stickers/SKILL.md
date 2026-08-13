@@ -37,11 +37,9 @@ WNDR Club — место, где мы вместе продвигаемся в �
 ## Что делает
 
 - Принимает фразу в Telegram, возвращает WebP 512×512, готовый для стикерпака
-- Держит стиль по картинке-референсу `assets/reference/wndr-reference-sheet.png`,
-  которая прикладывается к каждому запросу
+- Держит стиль по двум reference sheet: `assets/reference/wndr-ref-flat.png` для classic и `assets/reference/wndr-ref-retro.png` для expressive/illustration
 - Ведёт общий стикерпак в Telegram (владелец набора — Катя) и общий ZIP
-- Работает без премодерации: участники сами добавляют, убирают и возвращают
-  стикеры; удаление обратимо и записывается в прозрачную историю
+- Работает без премодерации: участники сами добавляют стикеры; удаляет автор или модератор, удаление необратимо, файл и журнал сохраняются
 - Публичные duplicate memory и ZIP видят только активный общий пак, не черновики
 - Считает квоты: бот открыт сообществу, а картинки платные
 
@@ -64,7 +62,7 @@ WNDR Club — место, где мы вместе продвигаемся в �
 
 ## Стиль
 
-Source of truth: `docs/reference/WNDR-Sticker-Agent-v0.1.pdf` sections 2/8/9 and `docs/reference/wndr-style-contract.v0.1.json`. Палитра ровно: `#CC3D11`, `#0D0D0D`, `#F2E2C8`, обводка `#F7F3EA`. Ровно два базовых цвета плюс акцент на 1–3 словах. Обводка 8–12px при 512px. Типографика: плотный тяжёлый ретро-гротеск, центр, 1–3 строки, без light-шрифтов. Формы: скруглённый прямоугольник, wavy blob, starburst, молния/резаный параллелограмм, декоративный овал, стрелка/указатель, stamp/зубчатый край.
+Source of truth: два visual reference sheet `assets/reference/wndr-ref-flat.png` / `assets/reference/wndr-ref-retro.png`; исторический v0.1-контракт палитры/банов — `docs/reference/WNDR-Sticker-Agent-v0.1.pdf` sections 2/8/9 and `docs/reference/wndr-style-contract.v0.1.json`. Палитра: `#CC3D11`, `#0D0D0D`, `#F2E2C8`, обводка `#F7F3EA` плюс редкие оттенки `#992D0E`, `#E0764A`, `#D9BE93`. Classic использует flat-реф, clean-формы, `spark/plain` и типографический автоакцент; expressive и иллюстрации — retro-реф, богатые рамки и мотивы. Шрифт: repo-local `assets/fonts/GolosText-Black.ttf`. Обводка 8–12px при 512px.
 
 Акцентное слово помечается звёздочками: `Это не *тантра*` — слово станет оранжевым.
 
@@ -94,7 +92,7 @@ from skill.wndr_stickers.src.config import get_settings
 from skill.wndr_stickers.src import imagegen
 s = get_settings()
 try:
-    img = imagegen.generate("test plate, no text", s.reference_sheet_path, s)
+    img = imagegen.generate("test plate, no text", s.reference_for("clean"), s)
     print("OK", img.provider, img.model, len(img.data), "B")
 except Exception as e:
     print("FAIL", e)
