@@ -18,7 +18,6 @@ def test_private_command_menu_contains_user_facing_pack_actions():
     assert [command.command for command in PRIVATE_COMMANDS] == [
         "pack",
         "zip",
-        "history",
         "delete",
         "style",
         "quota",
@@ -26,6 +25,7 @@ def test_private_command_menu_contains_user_facing_pack_actions():
     ]
     assert all(command.description for command in PRIVATE_COMMANDS)
     assert "stats" not in {command.command for command in PRIVATE_COMMANDS}
+    assert "history" not in {command.command for command in PRIVATE_COMMANDS}
 
 
 @pytest.mark.asyncio

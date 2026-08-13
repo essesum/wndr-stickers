@@ -59,6 +59,7 @@ def make_sticker(
     shape_key: str | None = None,
     motif: str | None = None,
     rng: random.Random | None = None,
+    mode_key: str | None = None,
 ) -> StickerResult:
     """Один стикер. Текст ставит код, поэтому по буквам ошибиться нельзя."""
     started = time.monotonic()
@@ -66,7 +67,9 @@ def make_sticker(
 
     # Режим стиля выбирается на каждый стикер: «classic» — сдержанный первый
     # стиль пака, «expressive» — нарядный v0.2 с оттенками и картинками.
-    mode = style.pick_mode(rng)
+    mode = style.mode_by_key(mode_key) if mode_key else style.pick_mode(rng)
+    if mode is None:
+        raise ValueError(f"unknown style mode: {mode_key}")
 
     shape = style.shape_by_key(shape_key) if shape_key else None
     if shape is None:

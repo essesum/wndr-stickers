@@ -34,7 +34,7 @@ LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 PRIVATE_COMMANDS = (
     BotCommand(command="pack", description="посмотреть общий стикерпак"),
     BotCommand(command="zip", description="скачать активные стикеры архивом"),
-    BotCommand(command="history", description="посмотреть историю общего пака"),
+
     BotCommand(command="delete", description="убрать свой стикер из пака"),
     BotCommand(command="style", description="посмотреть стиль и палитру WNDR"),
     BotCommand(command="quota", description="посмотреть лимиты генерации"),

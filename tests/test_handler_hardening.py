@@ -359,27 +359,8 @@ async def test_delete_of_missing_phrase_escapes_user_text(tmp_path):
     assert html.escape(injection) in sent
 
 
-async def test_history_escapes_phrases_and_usernames(tmp_path):
-    """Одна строка с «<» не должна ронять весь ответ /history."""
+async def test_history_is_not_a_user_facing_handler(tmp_path):
+    """История остаётся в SQLite/статистике, но отдельной команды больше нет."""
     settings = Settings(telegram_owner_id=111, state_dir=tmp_path, output_dir=tmp_path / "o")
-    await db.init_db(settings.db_path)
-
-    actions = [
-        SimpleNamespace(username="ann<b>", action="added", phrase="<i>фраза</i>"),
-    ]
     router = commands.build_router(settings)
-    callback = next(
-        h.callback for h in router.message.handlers if h.callback.__name__ == "_history"
-    )
-    message = SimpleNamespace(answer=AsyncMock())
-
-    original = db.recent_community_actions
-    db.recent_community_actions = AsyncMock(return_value=actions)
-    try:
-        await callback(message)
-    finally:
-        db.recent_community_actions = original
-
-    sent = message.answer.await_args.args[0]
-    assert "<i>" not in sent and "<b>" not in sent
-    assert "&lt;i&gt;фраза&lt;/i&gt;" in sent
+    assert "_history" not in {handler.callback.__name__ for handler in router.message.handlers}

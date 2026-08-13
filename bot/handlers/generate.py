@@ -1,4 +1,4 @@
-"""Главный сценарий: фраза -> стикер -> кнопки «ещё вариант» и «в пак»."""
+"""Главный сценарий: фраза -> стикер -> четыре осмысленных действия."""
 from __future__ import annotations
 
 import asyncio
@@ -13,6 +13,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     CallbackQuery,
+    ForceReply,
     FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -66,9 +67,17 @@ def _keyboard(sticker_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="🎲 Ещё вариант", callback_data=f"again:{sticker_id}"),
-                InlineKeyboardButton(text="➕ В пак", callback_data=f"pack:{sticker_id}"),
-            ]
+                InlineKeyboardButton(text="✅ В пак", callback_data=f"pack:{sticker_id}"),
+                InlineKeyboardButton(
+                    text="🎲 Другой стиль", callback_data=f"style:{sticker_id}"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔤 Поправить текст/акцент", callback_data=f"edit:{sticker_id}"
+                ),
+                InlineKeyboardButton(text="🗑 Не то", callback_data=f"dismiss:{sticker_id}"),
+            ],
         ]
     )
 
@@ -454,6 +463,7 @@ async def _produce(
     requester: User | None = None,
     semaphore: asyncio.Semaphore | None = None,
     illustration: bool = False,
+    mode_key: str | None = None,
 ) -> None:
     """Сделать один стикер и отдать его в чат.
 
@@ -521,7 +531,7 @@ async def _produce(
     def _run():
         if illustration:
             return pipeline.make_illustration(phrase, settings)
-        return pipeline.make_sticker(phrase, settings)
+        return pipeline.make_sticker(phrase, settings, mode_key=mode_key)
 
     try:
         if semaphore is None:
@@ -629,6 +639,10 @@ async def _dispatch_produce(
 def build_router(settings: Settings) -> Router:
     router = Router(name="generate")
     generation_slots = asyncio.Semaphore(max(1, settings.max_concurrent_generations))
+    # (sticker_id, id ForceReply-сообщения, deadline monotonic). В группе
+    # принимаем только reply на подсказку: случайная следующая реплика не должна
+    # внезапно стать подписью стикера.
+    pending_text_edits: dict[tuple[int, int], tuple[int, int, float]] = {}
 
     @router.message(Command("sticker"))
     async def _explicit(m: Message, command: CommandObject) -> None:
@@ -654,6 +668,73 @@ def build_router(settings: Settings) -> Router:
         # "channel", и гейт молча выключался. Проверяем private, а не
         # перечисляем групповые типы: новый тип чата не откроет бота заново.
         is_private = m.chat.type == ChatType.PRIVATE
+        author = getattr(m, "from_user", None)
+        chat_id = getattr(m.chat, "id", None)
+        edit_key = (chat_id, author.id) if chat_id is not None and author is not None else None
+        pending_edit = pending_text_edits.get(edit_key) if edit_key else None
+        edit_sticker_id = prompt_id = 0
+        deadline = 0.0
+        if pending_edit is not None and edit_key is not None and author is not None:
+            edit_sticker_id, prompt_id, deadline = pending_edit
+            expired = asyncio.get_running_loop().time() > deadline
+            replied_to_prompt = bool(
+                m.reply_to_message and m.reply_to_message.message_id == prompt_id
+            )
+            if expired:
+                pending_text_edits.pop(edit_key, None)
+            elif not is_private and not replied_to_prompt:
+                pending_edit = None
+            else:
+                pending_text_edits.pop(edit_key, None)
+        if pending_edit is not None and edit_key is not None and author is not None:
+            phrase = (m.text or "").strip()
+            row = await db.get_sticker(settings.db_path, edit_sticker_id)
+            if row is None or row.user_id != author.id or not row.raw_path:
+                await m.reply("Исходник потерялся — пришли фразу заново.")
+                return
+            verdict = phrase_moderation.check_phrase(phrase)
+            if not verdict:
+                pending_text_edits[edit_key] = (edit_sticker_id, prompt_id, deadline)
+                await m.reply(verdict.reason)
+                return
+            request_id = await db.log_request(
+                settings.db_path,
+                author.id,
+                phrase,
+                "pending",
+                "text edit",
+                chat_type=m.chat.type,
+            )
+            notice = await m.reply("Перевёрстываю текст — новую картинку не генерирую.")
+            try:
+                result = await asyncio.to_thread(
+                    pipeline.rebuild_from_raw, Path(row.raw_path), phrase, settings
+                )
+                # Сохраняем визуальный режим исходной плашки: иначе у локальной
+                # перевёрстки shape="reuse" и «Другой стиль» теряет направление.
+                result.shape = row.shape or result.shape
+                await db.update_request(settings.db_path, request_id, "ok", "rebuilt from raw")
+                new_id = await db.save_sticker(
+                    settings.db_path, request_id=request_id, user_id=author.id, result=result
+                )
+                await db.log_ui_event(
+                    settings.db_path,
+                    "edit:completed",
+                    author.id,
+                    f"source={edit_sticker_id}",
+                )
+                with contextlib.suppress(TelegramAPIError):
+                    await notice.delete()
+                await m.answer_document(
+                    FSInputFile(result.path),
+                    caption=voice.done(html.escape(result.phrase)),
+                    reply_markup=_keyboard(new_id),
+                )
+            except Exception as exc:  # noqa: BLE001
+                await db.update_request(settings.db_path, request_id, "failed", str(exc)[:500])
+                log.exception("локальная перевёрстка упала")
+                await notice.edit_text("Не смог переверстать. Пришли фразу заново.")
+            return
         replied_to_bot = bool(
             m.reply_to_message
             and m.reply_to_message.from_user
@@ -704,7 +785,6 @@ def build_router(settings: Settings) -> Router:
 
         # Фраза похожа на описание картинки — предлагаем выбор, а не решаем
         # за человека. «!» пропускает вопрос и рисует как обычно.
-        author = getattr(m, "from_user", None)
         if not got.force and intent.suggest_textless(got.phrase) and author is not None:
             offer_id = await db.log_request(
                 settings.db_path, author.id, got.phrase, "offered",
@@ -764,6 +844,89 @@ def build_router(settings: Settings) -> Router:
             query.message, settings, phrase,
             force=True, requester=query.from_user, semaphore=generation_slots,
         )
+
+    @router.callback_query(F.data.startswith("style:"))
+    async def _other_style(query: CallbackQuery) -> None:
+        sticker_id = _callback_sticker_id(query.data)
+        if sticker_id is None:
+            await query.answer("Кнопка испорчена")
+            return
+        row = await db.get_sticker(settings.db_path, sticker_id)
+        if row is None or not isinstance(query.message, Message):
+            await query.answer("Стикер потерялся")
+            return
+        if row.user_id != query.from_user.id:
+            await query.answer("Другой стиль может запросить автор", show_alert=True)
+            return
+        target_mode = "expressive" if (row.shape or "").startswith("clean-") else "classic"
+        await db.log_ui_event(
+            settings.db_path, "style", query.from_user.id, f"target={target_mode}"
+        )
+        await query.answer("Делаю в другом стиле")
+        if row.shape == "illustration":
+            motif = row.phrase.removeprefix(ILLUSTRATION_LABEL).strip()
+            await _produce_illustration(
+                query.message,
+                settings,
+                motif,
+                force=True,
+                requester=query.from_user,
+                semaphore=generation_slots,
+            )
+            return
+        await _produce(
+            query.message,
+            settings,
+            row.phrase,
+            force=True,
+            requester=query.from_user,
+            semaphore=generation_slots,
+            mode_key=target_mode,
+        )
+
+    @router.callback_query(F.data.startswith("edit:"))
+    async def _edit_text(query: CallbackQuery) -> None:
+        sticker_id = _callback_sticker_id(query.data)
+        if sticker_id is None or not isinstance(query.message, Message):
+            await query.answer("Кнопка испорчена")
+            return
+        row = await db.get_sticker(settings.db_path, sticker_id)
+        if row is None or row.user_id != query.from_user.id or not row.raw_path:
+            await query.answer("Исходник недоступен", show_alert=True)
+            return
+        await db.log_ui_event(settings.db_path, "edit:start", query.from_user.id)
+        await query.answer()
+        prompt = await query.message.answer(
+            "Пришли исправленную фразу. Акцентное слово выдели звёздочками: "
+            "<code>Это *важно*</code>.",
+            reply_markup=ForceReply(selective=True, input_field_placeholder="Новая фраза"),
+        )
+        pending_text_edits[(query.message.chat.id, query.from_user.id)] = (
+            sticker_id,
+            prompt.message_id,
+            asyncio.get_running_loop().time() + 600,
+        )
+
+    @router.callback_query(F.data.startswith("dismiss:"))
+    async def _dismiss(query: CallbackQuery) -> None:
+        sticker_id = _callback_sticker_id(query.data)
+        if sticker_id is None:
+            await query.answer("Кнопка испорчена")
+            return
+        row = await db.get_sticker(settings.db_path, sticker_id)
+        if row is None:
+            await query.answer("Стикер потерялся")
+            return
+        if row.user_id != query.from_user.id:
+            await query.answer("Этот вариант может убрать автор", show_alert=True)
+            return
+        await db.log_ui_event(
+            settings.db_path, "dismiss", query.from_user.id, f"sticker={sticker_id}"
+        )
+        await query.answer("Понял, этот вариант не берём")
+        if isinstance(query.message, Message):
+            with contextlib.suppress(TelegramAPIError):
+                await query.message.delete()
 
     @router.callback_query(F.data.startswith("illu:"))
     async def _offer_illustration(query: CallbackQuery) -> None:

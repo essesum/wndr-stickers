@@ -1,7 +1,6 @@
 """Команды бота."""
 from __future__ import annotations
 
-import html
 from pathlib import Path
 
 from aiogram import F, Router
@@ -32,7 +31,6 @@ WNDR Club — место, где мы вместе продвигаемся в �
 /quota — сколько стикеров тебе ещё доступно
 /pack — ссылка на общий стикерпак
 /zip — архив того, что сейчас в общем паке
-/history — кто добавлял и убирал стикеры
 /delete — список с командами для удаления стикеров
 
 <b>Пак собирает сообщество.</b> Свой стикер ты кладёшь и убираешь сам. Чужой
@@ -161,23 +159,6 @@ def build_router(settings: Settings) -> Router:
             caption=f"Активный общий пак: {count} файлов.",
         )
 
-    @router.message(Command("history"))
-    async def _history(m: Message) -> None:
-        actions = await db.recent_community_actions(settings.db_path)
-        if not actions:
-            await m.answer("История общего пака пока пуста.")
-            return
-        verbs = {"added": "добавил", "removed": "убрал", "restored": "вернул"}
-        lines = []
-        for action in actions:
-            # /history показывает чужие фразы и чужие ники: всё экранируем, иначе
-            # одна старая строка с «<» роняет весь ответ на parse_mode=HTML.
-            actor = f"@{html.escape(action.username)}" if action.username else "участник"
-            lines.append(
-                f"{actor} {verbs.get(action.action, action.action)} "
-                f"«{html.escape(action.phrase)}»"
-            )
-        await m.answer("Последние действия:\n" + "\n".join(lines))
 
     @router.message(Command("stats"), F.from_user.id == settings.telegram_owner_id)
     async def _stats(m: Message) -> None:

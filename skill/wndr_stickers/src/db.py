@@ -163,6 +163,9 @@ class StickerRow:
     pack_name: str | None = None
     #: Часть замороженного ядра — убрать может только владелец.
     is_core: bool = False
+    raw_path: str | None = None
+    shape: str | None = None
+    request_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -315,14 +318,14 @@ async def save_sticker(path: Path, *, request_id: int, user_id: int, result) -> 
 
 _STICKER_COLUMNS = (
     "id, user_id, slug, version, phrase, path, in_pack, pack_state, file_id, "
-    "pack_name, is_core"
+    "pack_name, is_core, raw_path, shape, request_id"
 )
 
 
 def _sticker(row) -> StickerRow:
     return StickerRow(
         row[0], row[1], row[2], row[3], row[4], row[5], bool(row[6]), row[7], row[8],
-        row[9], bool(row[10]),
+        row[9], bool(row[10]), row[11], row[12], row[13],
     )
 
 
